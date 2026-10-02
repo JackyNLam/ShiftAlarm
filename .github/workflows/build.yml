@@ -41,7 +41,13 @@ jobs:
         with:
           # Platform 35 matches compileSdk. AGP auto-downloads any extra
           # build-tools it needs (licenses are accepted by setup-android).
-          packages: 'platform-tools,platforms;android-35,build-tools;35.0.0'
+          # Packages must be newline-separated: a comma-separated string is
+          # passed to sdkmanager as a single bogus package id, which made the
+          # step fail with "Failed to find package 'platform-tools,platforms;...'".
+          packages: |
+            platform-tools
+            platforms;android-35
+            build-tools;35.0.0
 
       - name: Decode signing keystore (if configured)
         if: env.KEYSTORE_BASE64 != ''
