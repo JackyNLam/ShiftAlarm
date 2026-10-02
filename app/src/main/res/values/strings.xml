@@ -1,0 +1,29 @@
+<resources>
+    <string name="app_name">Shift Alarm</string>
+    <string name="home_title">首頁 / Home</string>
+    <string name="calendar_title">排程日曆 / Schedule Calendar</string>
+    <string name="template_title">班次模板 / Shift Templates</string>
+    <string name="next_alarm">下次鬧鐘 / Next Alarm</string>
+    <string name="no_upcoming_alarm">沒有即將到來的鬧鐘\nNo upcoming alarms</string>
+    <string name="shift_templates_count">班次模板 / Shift Templates</string>
+    <string name="scheduled_days">已排程天數 / Scheduled Days</string>
+    <string name="resync_alarms">重新同步鬧鐘 / Resync Alarms</string>
+    <string name="add_template">新增模板 / Add Template</string>
+    <string name="edit_template">編輯模板 / Edit Template</string>
+    <string name="save">儲存 / Save</string>
+    <string name="cancel">取消 / Cancel</string>
+    <string name="delete">刪除 / Delete</string>
+    <string name="confirm_delete">確認刪除 / Confirm Delete</string>
+    <string name="no_templates_yet">尚未建立任何班次模板\nNo shift templates yet</string>
+    <string name="tap_to_create">按右下角 + 按鈕新增\nTap + to create one</string>
+    <string name="alarm_permission_required">需要精確鬧鐘權限\nExact alarm permission required</string>
+    <string name="settings">設定 / Settings</string>
+    <string name="no_shift">無排班 / No Shift</string>
+    <string name="alarm_time">鬧鐘時間 / Alarm Times</string>
+    <string name="add_alarm_time">新增鬧鐘時間 / Add Alarm Time</string>
+    <string name="accessibility_service_description">Auto-confirms the system clock alarm dialog when Shift Alarm sets a system alarm, so you don\'t need to press OK manually.</string>
+    <string name="accessibility_setup_title">自動確認系統鬧鐘 / Auto-Confirm System Alarm</string>
+    <string name="accessibility_setup_instruction">請到設定啟用此功能以自動按下確定：
+Settings > 無障礙 Accessibility > 已安裝應用 Installed Apps > Shift Alarm > 開啟開關 Toggle ON</string>
+    <string name="enable_a11y">前往設定 / Open Settings</string>
+</resources>
