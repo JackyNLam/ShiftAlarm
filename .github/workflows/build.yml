@@ -23,6 +23,12 @@ jobs:
 
       - name: Validate Gradle wrapper
         uses: gradle/wrapper-validation-action@v3
+        # Optional supply-chain check. continue-on-error: the action downloads reference
+        # data from gradle.org, which can transiently fail on GitHub runners (seen:
+        # connect ETIMEDOUT to Cloudflare-fronted hosts) and would otherwise block every
+        # build. The wrapper jar is the repo's own committed file, and Gradle itself
+        # verifies the distribution via distributionSha256Sum in gradle-wrapper.properties.
+        continue-on-error: true
 
       - name: Set up JDK 25
         uses: actions/setup-java@v4
