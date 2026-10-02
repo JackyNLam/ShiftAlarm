@@ -55,24 +55,36 @@ class DashScopeApi {
             })
         }.toString()
 
-        // The platform OkHttp can drop the response mid-stream ("unexpected end of
-        // stream") when a connection is aborted — retry once on a fresh connection.
-        var lastIoError: IOException? = null
-        repeat(MAX_ATTEMPTS) { attempt ->
-            onDebug("POST $ENDPOINT — model: $model，嘗試 ${attempt + 1}/$MAX_ATTEMPTS（連線 30s / 讀取 120s）")
-            try {
-                return postJson(apiKey, body, onDebug)
-            } catch (e: IOException) {
-                lastIoError = e
-                onDebug("⚠️ 網路錯誤（${if (attempt + 1 < MAX_ATTEMPTS) "將重試" else "放棄"}）: ${e.message}")
+        // Keys are bound to the region they were created in: calling the
+        // mainland-China endpoint with an international-created key returns
+        // HTTP 401 invalid_api_key even though the key itself is valid. Try the
+        // CN endpoint first (most users), and only on a 401 fall back to the
+        // international endpoint before giving up. Network errors are retried per
+        // endpoint; other HTTP errors (400/404/...) are real API answers and are
+        // never retried.
+        var lastError: Exception? = null
+        for ((index, endpoint) in listOf(ENDPOINT, ENDPOINT_INT).withIndex()) {
+            var attempt = 0
+            while (attempt < MAX_ATTEMPTS) {
+                attempt++
+                onDebug("POST $endpoint — model: $model，嘗試 $attempt/$MAX_ATTEMPTS（連線 30s / 讀取 120s）")
+                try {
+                    return postJson(apiKey, body, endpoint, onDebug)
+                } catch (e: IOException) {
+                    lastError = e
+                    onDebug("⚠️ 網路錯誤: ${e.message}")
+                }
             }
+            val msg = lastError?.message.orEmpty()
+            if (!msg.contains("HTTP 401") || index >= 1) break
+            onDebug("⚠️ HTTP 401：API Key 可能綁定其他地域 — 改用國際站 endpoint 重試…")
         }
-        throw lastIoError ?: IllegalStateException("network error")
+        throw lastError ?: IllegalStateException("network error")
     }
 
-    private fun postJson(apiKey: String, body: String, onDebug: (String) -> Unit): String {
+    private fun postJson(apiKey: String, body: String, endpoint: String, onDebug: (String) -> Unit): String {
         val start = System.currentTimeMillis()
-        val conn = URL(ENDPOINT).openConnection() as HttpURLConnection
+        val conn = URL(endpoint).openConnection() as HttpURLConnection
         try {
             conn.requestMethod = "POST"
             conn.setRequestProperty("Authorization", "Bearer $apiKey")
@@ -119,6 +131,8 @@ class DashScopeApi {
     companion object {
         private const val ENDPOINT =
             "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+        private const val ENDPOINT_INT =
+            "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
         private const val MAX_ATTEMPTS = 2
     }
 }
