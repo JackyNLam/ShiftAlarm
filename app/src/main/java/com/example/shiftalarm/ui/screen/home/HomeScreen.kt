@@ -130,6 +130,7 @@ fun HomeScreen(
 
     // --- Import / Export state and launchers ---
     var showAiSheet by remember { mutableStateOf(false) }
+    var showImageManager by remember { mutableStateOf(false) }
     var viewingImage by remember { mutableStateOf<String?>(null) }
     var pendingDeleteImage by remember { mutableStateOf<String?>(null) }
 
@@ -477,8 +478,8 @@ fun HomeScreen(
                     )
                     ScheduleActionCard(
                         icon = Icons.Default.Image,
-                        text = "🖼️ 匯入排程圖片\nImport Schedule Image",
-                        onClick = { imagePickerLauncher.launch("image/*") }
+                        text = "🖼️ 排程圖片\nSchedule Image",
+                        onClick = { showImageManager = true }
                     )
                 }
                 // Right column: export schedule + AI extraction
@@ -504,34 +505,6 @@ fun HomeScreen(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
-
-            // Saved schedule images — view / add / delete
-            Text(
-                text = "排程圖片 / Schedule Images",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(state.scheduleImages, key = { it }) { name ->
-                    ScheduleImageThumbnail(
-                        fileName = name,
-                        onClick = { viewingImage = name },
-                        onDelete = { pendingDeleteImage = name }
-                    )
-                }
-                item(key = "add_image") {
-                    AddImageTile { imagePickerLauncher.launch("image/*") }
-                }
-            }
-            if (state.scheduleImages.isEmpty()) {
-                Text(
-                    text = "尚無排程圖片，點「＋」匯入排班表照片\nNo images yet — tap + to import your schedule photo",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
 
             /* 🔽 Debug: Test hourly check — commented out, keep for future debugging
             Spacer(modifier = Modifier.height(16.dp))
@@ -672,6 +645,56 @@ fun HomeScreen(
                 }
             }
         )
+    }
+
+    // Schedule-image manager (view / add / delete) — opened from the 排程圖片 button
+    if (showImageManager) {
+        Dialog(onDismissRequest = { showImageManager = false }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(16.dp)
+            ) {
+                Text(
+                    text = "排程圖片 / Schedule Images",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = if (state.scheduleImages.isEmpty())
+                        "尚無排程圖片，點「＋」加入排班表照片\nNo images yet — tap + to add a photo"
+                    else
+                        "點圖片檢視，點 ✕ 刪除\nTap to view, ✕ to delete",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(state.scheduleImages, key = { it }) { name ->
+                        ScheduleImageThumbnail(
+                            fileName = name,
+                            onClick = { viewingImage = name },
+                            onDelete = { pendingDeleteImage = name }
+                        )
+                    }
+                    item(key = "add_image") {
+                        AddImageTile { imagePickerLauncher.launch("image/*") }
+                    }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = { showImageManager = false }) {
+                        Text("關閉 / Close")
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -4,6 +4,7 @@ import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -42,17 +43,32 @@ class DashScopeApi {
                     })
                 })
             })
-        }
+        }.toString()
 
+        // The platform OkHttp can drop the response mid-stream ("unexpected end of
+        // stream") when a connection is aborted — retry once on a fresh connection.
+        var lastIoError: IOException? = null
+        repeat(MAX_ATTEMPTS) {
+            try {
+                return postJson(apiKey, body)
+            } catch (e: IOException) {
+                lastIoError = e
+            }
+        }
+        throw lastIoError ?: IllegalStateException("network error")
+    }
+
+    private fun postJson(apiKey: String, body: String): String {
         val conn = URL(ENDPOINT).openConnection() as HttpURLConnection
         try {
             conn.requestMethod = "POST"
             conn.setRequestProperty("Authorization", "Bearer $apiKey")
             conn.setRequestProperty("Content-Type", "application/json")
+            conn.setRequestProperty("Connection", "close") // no keep-alive pooling
             conn.connectTimeout = 30_000
             conn.readTimeout = 120_000
             conn.doOutput = true
-            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
 
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
@@ -85,5 +101,6 @@ class DashScopeApi {
     companion object {
         private const val ENDPOINT =
             "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+        private const val MAX_ATTEMPTS = 2
     }
 }
