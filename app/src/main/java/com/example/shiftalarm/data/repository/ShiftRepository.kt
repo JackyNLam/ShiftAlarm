@@ -119,7 +119,11 @@ class ShiftRepository(
                         name = entry.shiftLabel // name defaults to shiftLabel
                     )
                     val savedId = storage.saveTemplate(newTemplate)
-                    templates.add(newTemplate)
+                    // saveTemplate can reassign the id (System.currentTimeMillis), so keep the
+                    // actually-saved id in the local list — otherwise later entries with the same
+                    // shiftLabel+location get a phantom id that no stored template has, leaving
+                    // their dates assigned to a template that doesn't exist.
+                    templates.add(newTemplate.copy(id = savedId))
                     savedId
                 }
                 storage.setScheduleForDate(entry.date, templateId)

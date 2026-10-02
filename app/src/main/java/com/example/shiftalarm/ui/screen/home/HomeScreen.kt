@@ -96,8 +96,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.text.SimpleDateFormat
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun HomeScreen(
@@ -625,14 +628,29 @@ fun HomeScreen(
                         tint = Color.White
                     )
                 }
-                Text(
-                    text = "雙指縮放 / Pinch to zoom",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White.copy(alpha = 0.7f),
+                Column(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(bottom = 56.dp)
-                )
+                        .padding(horizontal = 24.dp)
+                        .padding(bottom = 56.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = name,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White.copy(alpha = 0.9f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    name.removePrefix("img_").removeSuffix(".jpg").toLongOrNull()?.let { millis ->
+                        Text(
+                            text = "📷 " + SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
+                                .format(Date(millis)),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.7f)
+                        )
+                    }
+                }
                 Row(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)

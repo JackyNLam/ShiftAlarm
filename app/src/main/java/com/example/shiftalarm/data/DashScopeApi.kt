@@ -55,15 +55,15 @@ class DashScopeApi {
             })
         }.toString()
 
-        // Keys are bound to the region they were created in: calling the
-        // mainland-China endpoint with an international-created key returns
-        // HTTP 401 invalid_api_key even though the key itself is valid. Try the
-        // CN endpoint first (most users), and only on a 401 fall back to the
-        // international endpoint before giving up. Network errors are retried per
-        // endpoint; other HTTP errors (400/404/...) are real API answers and are
-        // never retried.
+        // Keys are bound to the region they were created in: an international-
+        // created key (e.g. Singapore console) returns HTTP 401 invalid_api_key
+        // on the mainland-China endpoint even though the key is valid. The
+        // international endpoint is primary (the Singapore key succeeded there),
+        // and only on a 401 do we fall back to the CN endpoint before giving up.
+        // Network errors are retried per endpoint; other HTTP errors (400/404/...)
+        // are real API answers and are never retried.
         var lastError: Exception? = null
-        for ((index, endpoint) in listOf(ENDPOINT, ENDPOINT_INT).withIndex()) {
+        for ((index, endpoint) in listOf(ENDPOINT_INT, ENDPOINT).withIndex()) {
             var attempt = 0
             while (attempt < MAX_ATTEMPTS) {
                 attempt++
@@ -79,12 +79,12 @@ class DashScopeApi {
                     // and the region fallback below never runs.
                     lastError = e
                     if (e.message?.contains("HTTP 401") != true || index >= 1) throw e
-                    break // 401 on the CN endpoint → try the international endpoint
+                    break // 401 on the current endpoint → try the other region's endpoint
                 }
             }
             val msg = lastError?.message.orEmpty()
             if (!msg.contains("HTTP 401") || index >= 1) break
-            onDebug("⚠️ HTTP 401：API Key 可能綁定其他地域 — 改用國際站 endpoint 重試…")
+            onDebug("⚠️ HTTP 401：API Key 可能綁定其他地域 — 改用另一地域 endpoint 重試…")
         }
         throw lastError ?: IllegalStateException("network error")
     }
@@ -136,10 +136,12 @@ class DashScopeApi {
     }
 
     companion object {
-        private const val ENDPOINT =
-            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+        // International (Singapore) endpoint is tried first — the key is
+        // Singapore-created; CN is the region fallback on 401.
         private const val ENDPOINT_INT =
             "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
+        private const val ENDPOINT =
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
         private const val MAX_ATTEMPTS = 2
     }
 }
