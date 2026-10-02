@@ -25,6 +25,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -72,16 +73,20 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.shiftalarm.data.ScheduleImageStorage
 import com.example.shiftalarm.data.repository.ShiftRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.time.LocalDate
@@ -539,7 +544,7 @@ fun HomeScreen(
         }
     }
 
-    // Full-screen viewer for a saved schedule image
+    // Full-screen viewer for a saved schedule image — whole image, fitted
     viewingImage?.let { name ->
         val context = LocalContext.current
         val bitmap by produceState<android.graphics.Bitmap?>(initialValue = null, name) {
@@ -551,45 +556,43 @@ fun HomeScreen(
                 else null
             }
         }
-        Dialog(onDismissRequest = { viewingImage = null }) {
-            Column(
+        Dialog(
+            onDismissRequest = { viewingImage = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(MaterialTheme.colorScheme.surface)
-                    .padding(16.dp)
+                    .fillMaxSize()
+                    .background(Color.Black),
+                contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = "排程圖片 / Schedule Image",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(12.dp))
                 val bmp = bitmap
                 if (bmp != null) {
                     Image(
                         bitmap = bmp.asImageBitmap(),
                         contentDescription = name,
                         contentScale = ContentScale.Fit,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 520.dp)
-                            .clip(RoundedCornerShape(8.dp))
+                        modifier = Modifier.fillMaxSize()
                     )
                 } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(200.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator()
-                    }
+                    CircularProgressIndicator(color = Color.White)
                 }
-                Spacer(modifier = Modifier.height(12.dp))
+                IconButton(
+                    onClick = { viewingImage = null },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "關閉 / Close",
+                        tint = Color.White
+                    )
+                }
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(12.dp)
                 ) {
                     TextButton(onClick = {
                         viewModel.deleteScheduleImage(name)
@@ -598,13 +601,14 @@ fun HomeScreen(
                         Icon(
                             Icons.Default.Delete,
                             contentDescription = null,
+                            tint = Color.White,
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("刪除 / Delete")
+                        Text("刪除 / Delete", color = Color.White)
                     }
                     TextButton(onClick = { viewingImage = null }) {
-                        Text("關閉 / Close")
+                        Text("關閉 / Close", color = Color.White)
                     }
                 }
             }
@@ -618,9 +622,12 @@ fun HomeScreen(
             initialOptions = state.aiOptions,
             isBusy = state.aiBusy,
             result = state.aiResult,
+            debugLog = state.aiDebugLog,
+            startedAt = state.aiStartedAt,
             onExtract = { key, model, prompt, imageName ->
                 viewModel.extractScheduleWithAi(key, model, prompt, imageName)
             },
+            onClearDebug = viewModel::clearAiDebugLog,
             onDismiss = { showAiSheet = false }
         )
     }
@@ -799,7 +806,10 @@ private fun AiExtractSheet(
     initialOptions: AiOptions,
     isBusy: Boolean,
     result: String?,
+    debugLog: String,
+    startedAt: Long?,
     onExtract: (apiKey: String, model: String, prompt: String, imageName: String) -> Unit,
+    onClearDebug: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -929,6 +939,65 @@ private fun AiExtractSheet(
                 }
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(if (isBusy) "擷取中… / Extracting…" else "擷取並匯出 JSON / Extract & Export JSON")
+            }
+
+            // Live elapsed timer so a long wait is visibly progressing, not frozen
+            if (isBusy) {
+                var elapsedSec by remember { mutableStateOf(0L) }
+                LaunchedEffect(startedAt, isBusy) {
+                    while (true) {
+                        val started = startedAt ?: return@LaunchedEffect
+                        elapsedSec = (System.currentTimeMillis() - started) / 1000
+                        delay(1000)
+                    }
+                }
+                Text(
+                    text = "⏳ 已等待 ${elapsedSec} 秒 / Waiting ${elapsedSec}s（單次嘗試上限約 150 秒）",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+
+            // Copyable debug log (long-press to select & copy)
+            if (debugLog.isNotBlank()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "📋 除錯日誌 / Debug Log",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (!isBusy) {
+                        TextButton(onClick = onClearDebug) {
+                            Text("清空 / Clear", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+                SelectionContainer {
+                    Text(
+                        text = debugLog,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 220.dp)
+                            .verticalScroll(rememberScrollState())
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                            .padding(10.dp)
+                    )
+                }
+                Text(
+                    text = "長按日誌即可選取複製 / Long-press to select & copy",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                )
             }
         }
     }

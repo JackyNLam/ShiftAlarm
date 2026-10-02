@@ -13,9 +13,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.nio.charset.Charset
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /** Saved DashScope options for AI schedule extraction (persisted in SharedPreferences). */
 data class AiOptions(
@@ -45,6 +49,8 @@ data class HomeUiState(
     val aiBusy: Boolean = false,
     val aiResult: String? = null,
     val pendingAiExportJson: String? = null,
+    val aiDebugLog: String = "",
+    val aiStartedAt: Long? = null,
     val isLoading: Boolean = true
 )
 
@@ -263,42 +269,67 @@ class HomeViewModel(
      */
     fun extractScheduleWithAi(apiKey: String, model: String, prompt: String, imageName: String) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(
-                aiBusy = true,
-                aiResult = null,
-                pendingAiExportJson = null
-            )
+            val resolvedModel = model.ifBlank { "qwen-vl-plus" }
+            _uiState.update {
+                it.copy(
+                    aiBusy = true,
+                    aiResult = null,
+                    pendingAiExportJson = null,
+                    aiStartedAt = System.currentTimeMillis(),
+                    aiDebugLog = "[${ts()}] 開始 AI 擷取 / Start extraction (model: $resolvedModel)"
+                )
+            }
             try {
                 if (apiKey.isBlank()) throw Exception("請輸入 DashScope API Key")
                 if (imageName.isBlank()) throw Exception("請選擇排程圖片 / Select a schedule image")
-                val resolvedModel = model.ifBlank { "qwen-vl-plus" }
                 val imageFile = imageStorage.fileFor(imageName)
                 if (!imageFile.exists()) throw Exception("圖片不存在 / Image not found: $imageName")
 
                 // Save options first so the config survives even if the call fails
                 saveAiOptions(AiOptions(apiKey = apiKey, model = resolvedModel, prompt = prompt))
+                appendAiLog("檢查通過: ${imageFile.name}（${imageFile.length()} bytes）")
 
                 val content = withContext(Dispatchers.IO) {
-                    dashScopeApi.extractContent(apiKey, resolvedModel, prompt, imageFile)
+                    dashScopeApi.extractContent(apiKey, resolvedModel, prompt, imageFile) { line ->
+                        appendAiLog(line)
+                    }
                 }
                 val data = ScheduleExportData.fromJson(cleanAiJson(content))
                 if (data.entries.isEmpty()) {
                     throw Exception("AI 沒有解析到排程 / AI returned no entries")
                 }
-
-                _uiState.value = _uiState.value.copy(
-                    aiBusy = false,
-                    aiResult = "✅ 解析成功: ${data.entries.size} 筆排程，請選擇儲存位置…",
-                    pendingAiExportJson = data.toJsonString(prettyPrint = true)
-                )
+                appendAiLog("JSON 解析成功: ${data.entries.size} 筆排程")
+                _uiState.update {
+                    it.copy(
+                        aiBusy = false,
+                        aiStartedAt = null,
+                        aiResult = "✅ 解析成功: ${data.entries.size} 筆排程，請選擇儲存位置…",
+                        pendingAiExportJson = data.toJsonString(prettyPrint = true)
+                    )
+                }
             } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    aiBusy = false,
-                    aiResult = "❌ AI 擷取失敗: ${e.message}"
-                )
+                appendAiLog("❌ 失敗: ${e.message}")
+                _uiState.update {
+                    it.copy(
+                        aiBusy = false,
+                        aiStartedAt = null,
+                        aiResult = "❌ AI 擷取失敗: ${e.message}"
+                    )
+                }
             }
         }
     }
+
+    /** Clears the on-screen AI debug log. */
+    fun clearAiDebugLog() {
+        _uiState.update { it.copy(aiDebugLog = "") }
+    }
+
+    private fun appendAiLog(line: String) {
+        _uiState.update { it.copy(aiDebugLog = it.aiDebugLog + "\n[${ts()}] $line") }
+    }
+
+    private fun ts(): String = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
 
     /** Writes the pending AI-extracted JSON to the user-chosen file (SAF uri). */
     fun completeAiExport(uri: Uri) {

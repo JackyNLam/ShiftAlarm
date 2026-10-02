@@ -12,8 +12,8 @@ import java.io.FileOutputStream
 
 /**
  * Stores "schedule image" photos (pictures of the paper shift schedule) inside app
- * storage, resized to at most 800px wide (EXIF rotation applied) so the originals are
- * cheap to keep, view and re-run through AI extraction.
+ * storage, resized to at most 1000px wide (EXIF rotation applied) so the originals
+ * are cheap to keep, view and re-run through AI extraction.
  *
  * Full-res source is never kept: the saved JPEG is the resized one.
  */
@@ -128,7 +128,7 @@ class ScheduleImageStorage(context: Context) {
 
     companion object {
         const val DIR_NAME = "schedule_images"
-        private const val TARGET_WIDTH = 800
+        private const val TARGET_WIDTH = 1000
         private const val MAX_SOURCE_BYTES = 100 * 1024 * 1024
     }
 }

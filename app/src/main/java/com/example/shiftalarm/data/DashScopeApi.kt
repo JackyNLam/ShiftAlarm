@@ -19,9 +19,19 @@ class DashScopeApi {
     /**
      * Sends the image (base64 data URL) plus [prompt] to the vision model and returns
      * the model's text answer (expected to be a JSON schedule in import/export format).
+     * [onDebug] receives human-readable progress lines for the on-screen debug log
+     * (called from whichever thread the network work runs on — must be thread-safe).
      */
-    fun extractContent(apiKey: String, model: String, prompt: String, imageFile: File): String {
+    fun extractContent(
+        apiKey: String,
+        model: String,
+        prompt: String,
+        imageFile: File,
+        onDebug: (String) -> Unit = {}
+    ): String {
         val imageBase64 = Base64.encodeToString(imageFile.readBytes(), Base64.NO_WRAP)
+        onDebug("圖片 ${imageFile.name} 已讀取，Base64 ${imageBase64.length / 1024} KB")
+
         val body = JSONObject().apply {
             put("model", model)
             put("temperature", 0.1) // deterministic extraction
@@ -48,17 +58,20 @@ class DashScopeApi {
         // The platform OkHttp can drop the response mid-stream ("unexpected end of
         // stream") when a connection is aborted — retry once on a fresh connection.
         var lastIoError: IOException? = null
-        repeat(MAX_ATTEMPTS) {
+        repeat(MAX_ATTEMPTS) { attempt ->
+            onDebug("POST $ENDPOINT — model: $model，嘗試 ${attempt + 1}/$MAX_ATTEMPTS（連線 30s / 讀取 120s）")
             try {
-                return postJson(apiKey, body)
+                return postJson(apiKey, body, onDebug)
             } catch (e: IOException) {
                 lastIoError = e
+                onDebug("⚠️ 網路錯誤（${if (attempt + 1 < MAX_ATTEMPTS) "將重試" else "放棄"}）: ${e.message}")
             }
         }
         throw lastIoError ?: IllegalStateException("network error")
     }
 
-    private fun postJson(apiKey: String, body: String): String {
+    private fun postJson(apiKey: String, body: String, onDebug: (String) -> Unit): String {
+        val start = System.currentTimeMillis()
         val conn = URL(ENDPOINT).openConnection() as HttpURLConnection
         try {
             conn.requestMethod = "POST"
@@ -70,9 +83,14 @@ class DashScopeApi {
             conn.doOutput = true
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
 
+            onDebug("已送出請求，等待回應…")
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val response = stream?.bufferedReader(Charsets.UTF_8)?.readText().orEmpty()
+            val elapsed = String.format(
+                java.util.Locale.US, "%.1f", (System.currentTimeMillis() - start) / 1000f
+            )
+            onDebug("收到回應: HTTP $code，${response.length} bytes（耗時 ${elapsed}s）")
             if (code !in 200..299) {
                 throw IllegalStateException("DashScope HTTP $code: ${shortError(response)}")
             }
