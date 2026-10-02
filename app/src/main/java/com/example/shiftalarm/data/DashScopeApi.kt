@@ -73,6 +73,13 @@ class DashScopeApi {
                 } catch (e: IOException) {
                     lastError = e
                     onDebug("⚠️ 網路錯誤: ${e.message}")
+                } catch (e: IllegalStateException) {
+                    // postJson throws HTTP errors as IllegalStateException, so a 401
+                    // must be caught here too — otherwise it aborts the whole call
+                    // and the region fallback below never runs.
+                    lastError = e
+                    if (e.message?.contains("HTTP 401") != true || index >= 1) throw e
+                    break // 401 on the CN endpoint → try the international endpoint
                 }
             }
             val msg = lastError?.message.orEmpty()
