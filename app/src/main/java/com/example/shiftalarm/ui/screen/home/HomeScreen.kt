@@ -7,6 +7,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,6 +40,8 @@ import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -68,8 +72,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -77,6 +83,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -566,16 +573,45 @@ fun HomeScreen(
                     .background(Color.Black),
                 contentAlignment = Alignment.Center
             ) {
+                var zoomScale by remember { mutableStateOf(1f) }
+                var zoomOffset by remember { mutableStateOf(Offset.Zero) }
+                val transformableState = rememberTransformableState { zoomChange, panChange, _ ->
+                    zoomScale = (zoomScale * zoomChange).coerceIn(1f, 5f)
+                    zoomOffset += panChange
+                }
                 val bmp = bitmap
                 if (bmp != null) {
                     Image(
                         bitmap = bmp.asImageBitmap(),
                         contentDescription = name,
                         contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                scaleX = zoomScale
+                                scaleY = zoomScale
+                                translationX = zoomOffset.x
+                                translationY = zoomOffset.y
+                            }
+                            .transformable(transformableState)
                     )
                 } else {
                     CircularProgressIndicator(color = Color.White)
+                }
+                IconButton(
+                    onClick = {
+                        zoomScale = 1f
+                        zoomOffset = Offset.Zero
+                    },
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(8.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Refresh,
+                        contentDescription = "重設縮放 / Reset zoom",
+                        tint = Color.White
+                    )
                 }
                 IconButton(
                     onClick = { viewingImage = null },
@@ -589,6 +625,14 @@ fun HomeScreen(
                         tint = Color.White
                     )
                 }
+                Text(
+                    text = "雙指縮放 / Pinch to zoom",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White.copy(alpha = 0.7f),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 56.dp)
+                )
                 Row(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
@@ -814,6 +858,7 @@ private fun AiExtractSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var apiKey by remember { mutableStateOf(initialOptions.apiKey) }
+    var showApiKey by remember { mutableStateOf(false) }
     var model by remember { mutableStateOf(initialOptions.model) }
     var prompt by remember { mutableStateOf(initialOptions.prompt) }
     var selectedImage by remember { mutableStateOf(scheduleImages.firstOrNull() ?: "") }
@@ -845,8 +890,18 @@ private fun AiExtractSheet(
                 label = { Text("DashScope API Key") },
                 placeholder = { Text("sk-...") },
                 singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
+                visualTransformation = if (showApiKey) VisualTransformation.None
+                else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    IconButton(onClick = { showApiKey = !showApiKey }) {
+                        Icon(
+                            if (showApiKey) Icons.Default.VisibilityOff
+                            else Icons.Default.Visibility,
+                            contentDescription = if (showApiKey) "隱藏 / Hide" else "顯示 / Show"
+                        )
+                    }
+                },
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(modifier = Modifier.height(8.dp))

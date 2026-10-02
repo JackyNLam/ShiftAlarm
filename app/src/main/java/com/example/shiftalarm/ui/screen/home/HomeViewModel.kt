@@ -280,17 +280,19 @@ class HomeViewModel(
                 )
             }
             try {
-                if (apiKey.isBlank()) throw Exception("請輸入 DashScope API Key")
+                val apiKeyNormalized = normalizeApiKey(apiKey)
+                if (apiKeyNormalized.isBlank()) throw Exception("請輸入 DashScope API Key")
                 if (imageName.isBlank()) throw Exception("請選擇排程圖片 / Select a schedule image")
                 val imageFile = imageStorage.fileFor(imageName)
                 if (!imageFile.exists()) throw Exception("圖片不存在 / Image not found: $imageName")
 
                 // Save options first so the config survives even if the call fails
-                saveAiOptions(AiOptions(apiKey = apiKey, model = resolvedModel, prompt = prompt))
+                saveAiOptions(AiOptions(apiKey = apiKeyNormalized, model = resolvedModel, prompt = prompt))
                 appendAiLog("檢查通過: ${imageFile.name}（${imageFile.length()} bytes）")
+                appendAiLog("API Key（遮蔽）: ${maskApiKey(apiKeyNormalized)}（${apiKeyNormalized.length} 字元）")
 
                 val content = withContext(Dispatchers.IO) {
-                    dashScopeApi.extractContent(apiKey, resolvedModel, prompt, imageFile) { line ->
+                    dashScopeApi.extractContent(apiKeyNormalized, resolvedModel, prompt, imageFile) { line ->
                         appendAiLog(line)
                     }
                 }
@@ -330,6 +332,19 @@ class HomeViewModel(
     }
 
     private fun ts(): String = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+
+    /** Strips whitespace and invisible characters that can sneak into copy-pasted API keys. */
+    private fun normalizeApiKey(raw: String): String =
+        raw.filter { c ->
+            !Character.isWhitespace(c) && !Character.isISOControl(c) &&
+                c != '\u200B' && c != '\u200C' && c != '\u200D' && c != '\uFEFF' && c != '\u2060'
+        }
+
+    /** Shows only a few characters so the user can verify which key is being sent. */
+    private fun maskApiKey(key: String): String {
+        if (key.length <= 4) return "***"
+        return "${key.take(4)}****${key.takeLast(2)}"
+    }
 
     /** Writes the pending AI-extracted JSON to the user-chosen file (SAF uri). */
     fun completeAiExport(uri: Uri) {
