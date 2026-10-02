@@ -572,9 +572,10 @@ fun HomeScreen(
 
     // Full-screen viewer for a saved schedule image
     viewingImage?.let { name ->
+        val context = LocalContext.current
         val bitmap by produceState<android.graphics.Bitmap?>(initialValue = null, name) {
             value = withContext(Dispatchers.IO) {
-                val file = File(LocalContext.current.filesDir, ScheduleImageStorage.DIR_NAME)
+                val file = File(context.filesDir, ScheduleImageStorage.DIR_NAME)
                     .resolve(name)
                 if (file.exists())
                     android.graphics.BitmapFactory.decodeFile(file.absolutePath)
