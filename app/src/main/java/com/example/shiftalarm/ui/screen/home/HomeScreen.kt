@@ -473,13 +473,11 @@ fun HomeScreen(
                     ScheduleActionCard(
                         icon = Icons.Default.FileUpload,
                         text = "📥 匯入排程\nImport Schedule",
-                        hint = "JSON — 匯入全部日期\nAll dates in file",
                         onClick = { importFileLauncher.launch(arrayOf("application/json")) }
                     )
                     ScheduleActionCard(
                         icon = Icons.Default.Image,
                         text = "🖼️ 匯入排程圖片\nImport Schedule Image",
-                        hint = "照片縮放至 800px 儲存\nResized to 800px",
                         onClick = { imagePickerLauncher.launch("image/*") }
                     )
                 }
@@ -491,7 +489,6 @@ fun HomeScreen(
                     ScheduleActionCard(
                         icon = Icons.Default.FileDownload,
                         text = "📤 匯出排程\nExport Schedules",
-                        hint = "匯出全部排程 JSON\nAll schedules as JSON",
                         onClick = {
                             val dateStr = LocalDate.now()
                                 .format(DateTimeFormatter.ISO_LOCAL_DATE)
@@ -501,7 +498,6 @@ fun HomeScreen(
                     ScheduleActionCard(
                         icon = Icons.Default.AutoAwesome,
                         text = "🤖 AI 擷取排程\nAI Extract Schedule",
-                        hint = "從圖片解析成排程 JSON\nImage → schedule JSON",
                         onClick = { showAiSheet = true }
                     )
                 }
@@ -683,7 +679,6 @@ fun HomeScreen(
 private fun ScheduleActionCard(
     icon: ImageVector,
     text: String,
-    hint: String,
     onClick: () -> Unit
 ) {
     Card(
@@ -700,15 +695,6 @@ private fun ScheduleActionCard(
                 Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(text, style = MaterialTheme.typography.bodySmall)
-            }
-            if (hint.isNotBlank()) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = hint,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
-                )
             }
         }
     }

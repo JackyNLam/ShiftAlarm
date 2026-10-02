@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
 
@@ -23,25 +24,30 @@ class ScheduleImageStorage(context: Context) {
 
     /** Saves the image at [uri], returns the stored file name ("img_<millis>.jpg"). */
     fun saveImage(uri: Uri): String {
+        // Read the source once into memory: picker content URIs can be one-shot
+        // streams, so reuse the same bytes for bounds, EXIF and the final decode
+        // instead of re-opening the URI (also sidesteps decodeStream quirks).
+        val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            ?: throw IllegalArgumentException("無法開啟圖片 / Cannot open image")
+        if (bytes.size > MAX_SOURCE_BYTES) {
+            throw IllegalArgumentException("圖片太大 / Image too large")
+        }
+
         // 1. Read dimensions without decoding, to pick a safe sampling factor.
+        //    (Bounds-only decoding returns null even on success — check the size.)
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        contentResolver.openInputStream(uri)?.use { input ->
-            BitmapFactory.decodeStream(input, null, bounds)
-                ?: throw IllegalStateException("無法解碼圖片 / Cannot decode image")
-        } ?: throw IllegalArgumentException("無法開啟圖片 / Cannot open image")
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-            throw IllegalArgumentException("無效的圖片 / Invalid image")
+            throw IllegalStateException("無法解碼圖片 / Cannot decode image")
         }
 
         // 2. EXIF orientation (phone photos are often rotated 90°).
         var orientation = ExifInterface.ORIENTATION_NORMAL
         try {
-            contentResolver.openInputStream(uri)?.use { input ->
-                orientation = ExifInterface(input).getAttributeInt(
-                    ExifInterface.TAG_ORIENTATION,
-                    ExifInterface.ORIENTATION_NORMAL
-                )
-            }
+            orientation = ExifInterface(ByteArrayInputStream(bytes)).getAttributeInt(
+                ExifInterface.TAG_ORIENTATION,
+                ExifInterface.ORIENTATION_NORMAL
+            )
         } catch (_: Exception) {
             // unreadable EXIF — treat as upright
         }
@@ -54,9 +60,8 @@ class ScheduleImageStorage(context: Context) {
         // 3. Sample down close to target width, then decode.
         val sample = sampleSizeFor(effectiveWidth, TARGET_WIDTH)
         val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sample }
-        val decoded = contentResolver.openInputStream(uri)?.use { input ->
-            BitmapFactory.decodeStream(input, null, decodeOpts)
-        } ?: throw IllegalStateException("無法解碼圖片 / Cannot decode image")
+        val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts)
+            ?: throw IllegalStateException("無法解碼圖片 / Cannot decode image")
 
         // 4. Rotate according to EXIF, then scale exactly to target width.
         val rotated = applyExifRotation(decoded, orientation)
@@ -124,5 +129,6 @@ class ScheduleImageStorage(context: Context) {
     companion object {
         const val DIR_NAME = "schedule_images"
         private const val TARGET_WIDTH = 800
+        private const val MAX_SOURCE_BYTES = 100 * 1024 * 1024
     }
 }
