@@ -49,7 +49,8 @@ data class ScheduleExportData(
     companion object {
         fun fromJson(json: String): ScheduleExportData {
             val obj = JSONObject(json)
-            val version = obj.getInt("version")
+            // version tolerated as optional: AI-extracted output may omit it
+            val version = obj.optInt("version", 1)
             val arr = obj.getJSONArray("entries")
             val entries = (0 until arr.length()).map {
                 ScheduleExportEntry.fromJson(arr.getJSONObject(it))

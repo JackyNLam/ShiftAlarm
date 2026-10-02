@@ -3,51 +3,88 @@ package com.example.shiftalarm.ui.screen.home
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Alarm
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import com.example.shiftalarm.data.ScheduleImageStorage
 import com.example.shiftalarm.data.repository.ShiftRepository
-import java.time.Instant
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 import java.time.LocalDate
-import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 @Composable
@@ -92,8 +129,9 @@ fun HomeScreen(
     }
 
     // --- Import / Export state and launchers ---
-    var showImportDatePicker by remember { mutableStateOf(false) }
-    val datePickerState = rememberDatePickerState()
+    var showAiSheet by remember { mutableStateOf(false) }
+    var viewingImage by remember { mutableStateOf<String?>(null) }
+    var pendingDeleteImage by remember { mutableStateOf<String?>(null) }
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
@@ -101,38 +139,32 @@ fun HomeScreen(
         uri?.let { viewModel.exportSchedule(it) }
     }
 
+    // Multi-day import: pick a JSON file, every entry in it is applied.
     val importFileLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
-        uri?.let { fileUri ->
-            val millis = datePickerState.selectedDateMillis ?: return@let
-            val date = Instant.ofEpochMilli(millis)
-                .atZone(ZoneId.systemDefault())
-                .toLocalDate()
-                .format(DateTimeFormatter.ISO_LOCAL_DATE)
-            viewModel.importSchedule(date, fileUri)
-        }
+        uri?.let { viewModel.importSchedule(it) }
     }
 
-    // Date picker dialog for import
-    if (showImportDatePicker) {
-        DatePickerDialog(
-            onDismissRequest = { showImportDatePicker = false },
-            confirmButton = {
-                TextButton(onClick = {
-                    showImportDatePicker = false
-                    importFileLauncher.launch(arrayOf("application/json"))
-                }) {
-                    Text("確認 / Confirm")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showImportDatePicker = false }) {
-                    Text("取消 / Cancel")
-                }
-            }
-        ) {
-            DatePicker(state = datePickerState)
+    // Schedule-image import (photo of the paper schedule) — resized to 800px and stored.
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let { viewModel.importScheduleImage(it) }
+    }
+
+    // AI result export — same JSON format as import/export schedule
+    val aiExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? ->
+        uri?.let { viewModel.completeAiExport(it) }
+    }
+
+    // Auto-export: as soon as AI extraction produces a result, ask where to save it.
+    LaunchedEffect(state.pendingAiExportJson) {
+        if (state.pendingAiExportJson != null) {
+            val today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
+            aiExportLauncher.launch("shift_alarm_ai_$today.json")
         }
     }
 
@@ -433,42 +465,76 @@ fun HomeScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Card(
+                // Left column: import schedule + import schedule image
+                Column(
                     modifier = Modifier.weight(1f),
-                    onClick = { showImportDatePicker = true }
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("📥 匯入排程\nImport Schedule", style = MaterialTheme.typography.bodySmall)
-                    }
+                    ScheduleActionCard(
+                        icon = Icons.Default.FileUpload,
+                        text = "📥 匯入排程\nImport Schedule",
+                        hint = "JSON — 匯入全部日期\nAll dates in file",
+                        onClick = { importFileLauncher.launch(arrayOf("application/json")) }
+                    )
+                    ScheduleActionCard(
+                        icon = Icons.Default.Image,
+                        text = "🖼️ 匯入排程圖片\nImport Schedule Image",
+                        hint = "照片縮放至 800px 儲存\nResized to 800px",
+                        onClick = { imagePickerLauncher.launch("image/*") }
+                    )
                 }
-                Card(
+                // Right column: export schedule + AI extraction
+                Column(
                     modifier = Modifier.weight(1f),
-                    onClick = {
-                        val dateStr = java.time.LocalDate.now()
-                            .format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE)
-                        exportLauncher.launch("shift_alarm_$dateStr.json")
-                    }
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("📤 匯出排程\nExport Schedules", style = MaterialTheme.typography.bodySmall)
-                    }
+                    ScheduleActionCard(
+                        icon = Icons.Default.FileDownload,
+                        text = "📤 匯出排程\nExport Schedules",
+                        hint = "匯出全部排程 JSON\nAll schedules as JSON",
+                        onClick = {
+                            val dateStr = LocalDate.now()
+                                .format(DateTimeFormatter.ISO_LOCAL_DATE)
+                            exportLauncher.launch("shift_alarm_$dateStr.json")
+                        }
+                    )
+                    ScheduleActionCard(
+                        icon = Icons.Default.AutoAwesome,
+                        text = "🤖 AI 擷取排程\nAI Extract Schedule",
+                        hint = "從圖片解析成排程 JSON\nImage → schedule JSON",
+                        onClick = { showAiSheet = true }
+                    )
                 }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Saved schedule images — view / add / delete
+            Text(
+                text = "排程圖片 / Schedule Images",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(state.scheduleImages, key = { it }) { name ->
+                    ScheduleImageThumbnail(
+                        fileName = name,
+                        onClick = { viewingImage = name },
+                        onDelete = { pendingDeleteImage = name }
+                    )
+                }
+                item(key = "add_image") {
+                    AddImageTile { imagePickerLauncher.launch("image/*") }
+                }
+            }
+            if (state.scheduleImages.isEmpty()) {
+                Text(
+                    text = "尚無排程圖片，點「＋」匯入排班表照片\nNo images yet — tap + to import your schedule photo",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
             }
 
             /* 🔽 Debug: Test hourly check — commented out, keep for future debugging
@@ -501,6 +567,359 @@ fun HomeScreen(
                 }
             }
             */
+        }
+    }
+
+    // Full-screen viewer for a saved schedule image
+    viewingImage?.let { name ->
+        val bitmap by produceState<android.graphics.Bitmap?>(initialValue = null, name) {
+            value = withContext(Dispatchers.IO) {
+                val file = File(LocalContext.current.filesDir, ScheduleImageStorage.DIR_NAME)
+                    .resolve(name)
+                if (file.exists())
+                    android.graphics.BitmapFactory.decodeFile(file.absolutePath)
+                else null
+            }
+        }
+        Dialog(onDismissRequest = { viewingImage = null }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(16.dp)
+            ) {
+                Text(
+                    text = "排程圖片 / Schedule Image",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                val bmp = bitmap
+                if (bmp != null) {
+                    Image(
+                        bitmap = bmp.asImageBitmap(),
+                        contentDescription = name,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 520.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = {
+                        viewModel.deleteScheduleImage(name)
+                        viewingImage = null
+                    }) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("刪除 / Delete")
+                    }
+                    TextButton(onClick = { viewingImage = null }) {
+                        Text("關閉 / Close")
+                    }
+                }
+            }
+        }
+    }
+
+    // AI extraction bottom sheet
+    if (showAiSheet) {
+        AiExtractSheet(
+            scheduleImages = state.scheduleImages,
+            initialOptions = state.aiOptions,
+            isBusy = state.aiBusy,
+            result = state.aiResult,
+            onExtract = { key, model, prompt, imageName ->
+                viewModel.extractScheduleWithAi(key, model, prompt, imageName)
+            },
+            onDismiss = { showAiSheet = false }
+        )
+    }
+
+    // Delete confirmation for schedule images
+    pendingDeleteImage?.let { name ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteImage = null },
+            title = { Text("刪除圖片 / Delete Image") },
+            text = { Text("確定要刪除這張排程圖片嗎？\nDelete this schedule image?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteScheduleImage(name)
+                    pendingDeleteImage = null
+                }) {
+                    Text("刪除 / Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteImage = null }) {
+                    Text("取消 / Cancel")
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun ScheduleActionCard(
+    icon: ImageVector,
+    text: String,
+    hint: String,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        onClick = onClick
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(text, style = MaterialTheme.typography.bodySmall)
+            }
+            if (hint.isNotBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = hint,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScheduleImageThumbnail(
+    fileName: String,
+    onClick: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val context = LocalContext.current
+    val bitmap by produceState<android.graphics.Bitmap?>(initialValue = null, fileName) {
+        value = withContext(Dispatchers.IO) {
+            val file = File(context.filesDir, ScheduleImageStorage.DIR_NAME).resolve(fileName)
+            if (file.exists()) {
+                val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = 8 }
+                android.graphics.BitmapFactory.decodeFile(file.absolutePath, opts)
+            } else null
+        }
+    }
+    Box(
+        modifier = Modifier
+            .size(96.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onClick)
+    ) {
+        val bmp = bitmap
+        if (bmp != null) {
+            Image(
+                bitmap = bmp.asImageBitmap(),
+                contentDescription = fileName,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+        IconButton(
+            onClick = onDelete,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(4.dp)
+                .size(24.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.55f))
+        ) {
+            Icon(
+                Icons.Default.Close,
+                contentDescription = "Delete image",
+                tint = Color.White,
+                modifier = Modifier.size(14.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun AddImageTile(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(96.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(Icons.Default.Add, contentDescription = null)
+            Text("匯入 / Add", style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AiExtractSheet(
+    scheduleImages: List<String>,
+    initialOptions: AiOptions,
+    isBusy: Boolean,
+    result: String?,
+    onExtract: (apiKey: String, model: String, prompt: String, imageName: String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var apiKey by remember { mutableStateOf(initialOptions.apiKey) }
+    var model by remember { mutableStateOf(initialOptions.model) }
+    var prompt by remember { mutableStateOf(initialOptions.prompt) }
+    var selectedImage by remember { mutableStateOf(scheduleImages.firstOrNull() ?: "") }
+    var menuExpanded by remember { mutableStateOf(false) }
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 32.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
+            Text(
+                text = "🤖 AI 排程擷取 / AI Schedule Extraction",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = "使用 DashScope 視覺模型從排程圖片解析排程，並匯出與匯入/匯出相同格式的 JSON。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = apiKey,
+                onValueChange = { apiKey = it },
+                label = { Text("DashScope API Key") },
+                placeholder = { Text("sk-...") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedTextField(
+                value = model,
+                onValueChange = { model = it },
+                label = { Text("模型 / Model") },
+                placeholder = { Text("qwen-vl-plus") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedTextField(
+                value = prompt,
+                onValueChange = { prompt = it },
+                label = { Text("提示詞 / Prompt") },
+                minLines = 4,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Which saved image to extract from
+            Box {
+                OutlinedButton(
+                    onClick = { menuExpanded = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = if (selectedImage.isNotBlank()) "🖼️ $selectedImage"
+                        else "請選擇排程圖片 / Select a schedule image",
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false }
+                ) {
+                    scheduleImages.forEach { name ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            },
+                            onClick = {
+                                selectedImage = name
+                                menuExpanded = false
+                            }
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            result?.let { msg ->
+                Text(
+                    text = msg,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (msg.startsWith("✅"))
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    else
+                        MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+
+            Button(
+                onClick = {
+                    onExtract(apiKey.trim(), model.trim(), prompt.trim(), selectedImage)
+                },
+                enabled = !isBusy && selectedImage.isNotBlank() && apiKey.isNotBlank(),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (isBusy) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.AutoAwesome,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(if (isBusy) "擷取中… / Extracting…" else "擷取並匯出 JSON / Extract & Export JSON")
+            }
         }
     }
 }

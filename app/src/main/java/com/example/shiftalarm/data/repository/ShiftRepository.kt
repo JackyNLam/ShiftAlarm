@@ -94,27 +94,37 @@ class ShiftRepository(
         ScheduleExportData(entries = exportEntries)
     }
 
-    suspend fun importEntryForDate(date: String, entry: ScheduleExportEntry) = withContext(Dispatchers.IO) {
-        val templates = storage.loadTemplates().toMutableList()
-
-        // Find existing template matching shiftLabel + location
-        val existing = templates.find {
-            it.shiftLabel == entry.shiftLabel && it.location == entry.location
+    /**
+     * Import every entry of a schedule file (multi-day). Templates are matched or
+     * created by (shiftLabel, location), and each date gets the resolved template
+     * assigned. Returns the number of entries imported.
+     */
+    suspend fun importScheduleEntries(entries: List<ScheduleExportEntry>): Int =
+        withContext(Dispatchers.IO) {
+            val templates = storage.loadTemplates().toMutableList()
+            var imported = 0
+            for (entry in entries) {
+                if (entry.date.isBlank()) continue
+                val existing = templates.find {
+                    it.shiftLabel == entry.shiftLabel && it.location == entry.location
+                }
+                val templateId = if (existing != null) {
+                    existing.id
+                } else {
+                    // Create new template with the given shiftLabel + location; other fields default
+                    val newTemplate = ShiftTemplate(
+                        id = System.currentTimeMillis(),
+                        shiftLabel = entry.shiftLabel,
+                        location = entry.location,
+                        name = entry.shiftLabel // name defaults to shiftLabel
+                    )
+                    val savedId = storage.saveTemplate(newTemplate)
+                    templates.add(newTemplate)
+                    savedId
+                }
+                storage.setScheduleForDate(entry.date, templateId)
+                imported++
+            }
+            imported
         }
-        val templateId = if (existing != null) {
-            existing.id
-        } else {
-            // Create new template with the given shiftLabel + location; other fields default
-            val newTemplate = ShiftTemplate(
-                id = System.currentTimeMillis(),
-                shiftLabel = entry.shiftLabel,
-                location = entry.location,
-                name = entry.shiftLabel // name defaults to shiftLabel
-            )
-            val savedId = storage.saveTemplate(newTemplate)
-            templates.add(newTemplate)
-            savedId
-        }
-        storage.setScheduleForDate(date, templateId)
-    }
 }
