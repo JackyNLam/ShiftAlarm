@@ -263,13 +263,31 @@ Workflow steps: validate the Gradle wrapper → JDK 25 → Android SDK 35 → bu
 `app-release.apk`.
 
 **Getting the APK:** open the workflow run → *Artifacts* → download `shiftalarm-apk`.
-The release APK is signed with the debug key (or your keystore, see below), so it is
-installable.
+The APKs are always signed (with your keystore, or the debug key as a fallback), so
+they're installable.
 
-**Optional — sign release builds with your own keystore** (not required):
+**Updating without losing data (recommended):** Every GitHub runner generates its own
+debug keystore, so without a fixed signing key each build's APK has a *different*
+signature — Android then refuses to install it over the previous version ("update
+conflict" / `INSTALL_FAILED_UPDATE_INCOMPATIBLE`), forcing an uninstall and losing app
+data. Give all builds one persistent key:
 
-1. Encode your keystore: `base64 -w0 keystore.jks` and add the output as a repo
+1. Generate a keystore once — with a JDK (`keytool`) or, no JDK needed, with openssl
+   (replace `PASS`; for PKCS12 use the same password for keystore and key):
+   `keytool -genkeypair -v -keystore keystore.jks -alias shiftalarm -keyalg RSA -keysize 2048 -validity 10950 -storepass PASS -keypass PASS -dname "CN=ShiftAlarm"`
+   or
+   `openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 10950 -subj "/CN=ShiftAlarm" && openssl pkcs12 -export -out keystore.p12 -inkey key.pem -in cert.pem -name shiftalarm -passout pass:PASS`
+2. Encode it: `base64 -w0 keystore.jks` (or `keystore.p12`) → add the output as a repo
    secret `KEYSTORE_BASE64`.
-2. Add secrets `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`.
-3. The release APK is then signed with your key. Until then, releases fall back to
-   the debug key so CI output stays installable.
+3. Add secrets `KEYSTORE_PASSWORD`, `KEY_ALIAS` (`shiftalarm`), and `KEY_PASSWORD`
+   (for a PKCS12 keystore, set `KEY_PASSWORD` to the same value as `KEYSTORE_PASSWORD`).
+4. From then on, **both** `app-debug.apk` and `app-release.apk` are signed with that
+   key, and installing a newer build over an older one keeps your data.
+
+**Note:** the app currently installed was signed with an old throwaway key, so the very
+first install after enabling the keystore still requires one uninstall. Export your
+schedule first (Home → **Export**) and re-import it afterwards.
+
+**No keystore configured (not recommended):** builds still succeed, but each run signs
+with a fresh debug key → the update conflict above. The workflow prints a warning when
+`KEYSTORE_BASE64` is missing.

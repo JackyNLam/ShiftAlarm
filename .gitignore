@@ -17,3 +17,5 @@ local.properties
 # Signing keys (decoded from KEYSTORE_BASE64 secret during CI)
 *.jks
 *.keystore
+*.p12
+*.pem

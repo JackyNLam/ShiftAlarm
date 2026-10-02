@@ -17,14 +17,36 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Persistent CI signing. When KEYSTORE_PATH/KEYSTORE_PASSWORD/KEY_ALIAS/KEY_PASSWORD
+    // are present (fed from GitHub Secrets in .github/workflows/build.yml), BOTH debug and
+    // release APKs are signed with that keystore, so a new build installs over the previous
+    // one without uninstalling. Without them, builds fall back to the runner's debug key,
+    // which is freshly generated per GitHub run — a different signature every time, so
+    // Android rejects updates (INSTALL_FAILED_UPDATE_INCOMPATIBLE) and data is lost.
+    val keystorePath = System.getenv("KEYSTORE_PATH")
+    val hasCiKeystore = !keystorePath.isNullOrBlank()
+    if (hasCiKeystore) {
+        val missingSecrets = listOf("KEYSTORE_PASSWORD", "KEY_ALIAS", "KEY_PASSWORD")
+            .filter { System.getenv(it).isNullOrBlank() }
+        if (missingSecrets.isNotEmpty()) {
+            throw GradleException(
+                "KEYSTORE_PATH is set but ${missingSecrets.joinToString(", ")} is missing. " +
+                    "Add the missing GitHub Secrets, then re-run the workflow."
+            )
+        }
+    }
+    val ciSigningConfig = if (hasCiKeystore) "ci" else "debug"
+
     signingConfigs {
-        // CI-only: when KEYSTORE_PATH/KEYSTORE_PASSWORD/KEY_ALIAS/KEY_PASSWORD
-        // env vars are present (fed from GitHub Secrets in .github/workflows/build.yml),
-        // releases are signed with that keystore. Locally, without these vars,
-        // the release build falls back to debug signing so the APK is installable.
-        if (!System.getenv("KEYSTORE_PATH").isNullOrBlank()) {
-            create("release") {
-                storeFile = rootProject.file(System.getenv("KEYSTORE_PATH"))
+        if (hasCiKeystore) {
+            create("ci") {
+                val keystoreFile = rootProject.file(keystorePath!!)
+                storeFile = keystoreFile
+                // The workflow always decodes the secret to a single fixed filename, so
+                // sniff the container header to support both keytool .jks (JKS magic)
+                // and openssl-generated PKCS12 keystores (DER starts with 0x30).
+                val firstByte = keystoreFile.inputStream().use { it.readNBytes(4).firstOrNull() }
+                storeType = if (firstByte != null && firstByte.toInt() == 0x30) "PKCS12" else "JKS"
                 storePassword = System.getenv("KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("KEY_ALIAS")
                 keyPassword = System.getenv("KEY_PASSWORD")
@@ -33,13 +55,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName(ciSigningConfig)
+        }
         release {
             isMinifyEnabled = false
-            signingConfig = if (System.getenv("KEYSTORE_PATH").isNullOrBlank()) {
-                signingConfigs.getByName("debug")
-            } else {
-                signingConfigs.getByName("release")
-            }
+            signingConfig = signingConfigs.getByName(ciSigningConfig)
         }
     }
     compileOptions {

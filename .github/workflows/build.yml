@@ -43,6 +43,11 @@ jobs:
           echo "$KEYSTORE_BASE64" | base64 -d > keystore.jks
           echo "KEYSTORE_PATH=keystore.jks" >> "$GITHUB_ENV"
 
+      - name: Warn when builds will use an ephemeral debug key
+        if: env.KEYSTORE_BASE64 == ''
+        run: |
+          echo "::warning::No KEYSTORE_BASE64 secret set. APKs are signed with a fresh runner debug key, so installing them over a previous build fails with a signature conflict. Add the keystore secrets (see README, CI Build section) to make updates install over old versions."
+
       - name: Set up Gradle (caching)
         uses: gradle/actions/setup-gradle@v4
 
