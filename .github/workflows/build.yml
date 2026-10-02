@@ -10,8 +10,14 @@ permissions:
   contents: read
 
 env:
-  # Empty when the KEYSTORE_BASE64 secret is not configured; set from the secret when it is.
+  # GitHub does not inject secrets into the job environment automatically; each one
+  # must be mapped here explicitly. The "ci" signing config in app/build.gradle.kts
+  # reads all four via System.getenv(...): it fails fast if KEYSTORE_PATH is set but
+  # any of the other three is blank (missing or unmapped secret).
   KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+  KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+  KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+  KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
 jobs:
   build:
