@@ -251,3 +251,25 @@ User taps date → bottom sheet → selects template
     → scheduler.enqueueSystemAlarmSyncBatch() (for all future alarm times)
     → scheduler.autoSetSystemAlarmIfNear()
 ```
+
+---
+
+## CI Build (GitHub Actions)
+
+The `.github/workflows/build.yml` workflow compiles the app on GitHub's servers (no local SDK required) and uploads the APKs as a downloadable artifact. It runs on every push to `main`, on pull requests, and manually via **Actions → Build APK → Run workflow**.
+
+Workflow steps: validate the Gradle wrapper → JDK 25 → Android SDK 35 → build
+`assembleDebug` + `assembleRelease` + unit tests → upload `app-debug.apk` /
+`app-release.apk`.
+
+**Getting the APK:** open the workflow run → *Artifacts* → download `shiftalarm-apk`.
+The release APK is signed with the debug key (or your keystore, see below), so it is
+installable.
+
+**Optional — sign release builds with your own keystore** (not required):
+
+1. Encode your keystore: `base64 -w0 keystore.jks` and add the output as a repo
+   secret `KEYSTORE_BASE64`.
+2. Add secrets `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`.
+3. The release APK is then signed with your key. Until then, releases fall back to
+   the debug key so CI output stays installable.

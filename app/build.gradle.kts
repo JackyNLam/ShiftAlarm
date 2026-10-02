@@ -17,9 +17,29 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        // CI-only: when KEYSTORE_PATH/KEYSTORE_PASSWORD/KEY_ALIAS/KEY_PASSWORD
+        // env vars are present (fed from GitHub Secrets in .github/workflows/build.yml),
+        // releases are signed with that keystore. Locally, without these vars,
+        // the release build falls back to debug signing so the APK is installable.
+        if (!System.getenv("KEYSTORE_PATH").isNullOrBlank()) {
+            create("release") {
+                storeFile = rootProject.file(System.getenv("KEYSTORE_PATH"))
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = if (System.getenv("KEYSTORE_PATH").isNullOrBlank()) {
+                signingConfigs.getByName("debug")
+            } else {
+                signingConfigs.getByName("release")
+            }
         }
     }
     compileOptions {
