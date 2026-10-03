@@ -1473,7 +1473,21 @@ private fun DownloadJsonPickerDialog(
     val context = LocalContext.current
     var files by remember { mutableStateOf<List<DownloadJsonFile>?>(null) }
     var unavailable by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
+    var reloadKey by remember { mutableStateOf(0) }
+    // One-time folder grant: on scoped-storage devices listing the Download
+    // folder really needs it. The picked tree is persisted, so later imports
+    // go straight through the real filesystem — never the ghost-prone picker.
+    val grantTreeLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri: Uri? ->
+        if (treeUri != null) {
+            DownloadJsonPicker.saveGrantedTree(context, treeUri)
+            reloadKey++
+        }
+    }
+    LaunchedEffect(reloadKey) {
+        unavailable = false
+        files = null
         val listed = withContext(Dispatchers.IO) {
             DownloadJsonPicker.listDownloadJsonFiles(context)
         }
@@ -1513,11 +1527,19 @@ private fun DownloadJsonPickerDialog(
                 }
                 unavailable -> {
                     Text(
-                        text = "無法讀取下載資料夾，請用「瀏覽…」選取檔案\nCannot read the Download folder — use Browse instead",
+                        text = "無法讀取下載資料夾，請先允許應用程式存取\nCannot read the Download folder — grant access first",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.padding(vertical = 8.dp)
                     )
+                    Button(
+                        onClick = {
+                            grantTreeLauncher.launch(Uri.parse(DownloadJsonPicker.DOWNLOAD_TREE_URI))
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("授權存取 / Grant access")
+                    }
                 }
                 currentFiles.isNullOrEmpty() -> {
                     Text(
