@@ -1070,9 +1070,10 @@ private fun AiExtractSheet(
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
+                    val cropLabel = cropBitmap
                     Text(
-                        text = if (cropBitmap != null)
-                            "✂️ 已選擇區域 ${cropBitmap.width}×${cropBitmap.height}"
+                        text = if (cropLabel != null)
+                            "✂️ 已選擇區域 ${cropLabel.width}×${cropLabel.height}"
                         else "✂️ 選擇區域 / Select region",
                         style = MaterialTheme.typography.bodySmall
                     )
