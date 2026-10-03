@@ -1,6 +1,7 @@
 package com.example.shiftalarm.data
 
 import android.content.Context
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Environment
 import android.provider.DocumentsContract
@@ -139,4 +140,31 @@ object DownloadJsonPicker {
             .mapValues { (_, list) -> list.maxByOrNull { it.lastModifiedMillis }!! }
             .values
             .sortedByDescending { it.lastModifiedMillis }
+
+    /**
+     * Forces MediaStore to rescan the Download folder before launching the system
+     * file picker, so deleted files ("ghosts") are dropped from the provider index.
+     *
+     * Call this right before [ActivityResultContracts.OpenDocument].launch().
+     * [onComplete] runs on the main thread after the scan is done — launch the
+     * picker inside it.
+     */
+    fun refreshDownloadsCache(context: Context, onComplete: () -> Unit) {
+        val downloadDir = try {
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        } catch (e: Exception) {
+            null
+        }
+        if (downloadDir != null && downloadDir.isDirectory) {
+            val files = downloadDir.listFiles()
+            if (!files.isNullOrEmpty()) {
+                val filePaths = files.map { it.absolutePath }.toTypedArray()
+                MediaScannerConnection.scanFile(context, filePaths, null) { _, _ ->
+                    onComplete()
+                }
+                return
+            }
+        }
+        onComplete()
+    }
 }
