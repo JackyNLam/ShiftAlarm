@@ -1472,12 +1472,10 @@ private fun DownloadJsonPickerDialog(
 ) {
     val context = LocalContext.current
     var files by remember { mutableStateOf<List<DownloadJsonFile>?>(null) }
-    var unavailable by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        val listed = withContext(Dispatchers.IO) {
+        files = withContext(Dispatchers.IO) {
             DownloadJsonPicker.listDownloadJsonFiles(context)
         }
-        if (listed == null) unavailable = true else files = listed
     }
     Dialog(onDismissRequest = onDismiss) {
         Column(
@@ -1501,7 +1499,7 @@ private fun DownloadJsonPickerDialog(
             Spacer(modifier = Modifier.height(12.dp))
             val currentFiles = files
             when {
-                currentFiles == null && !unavailable -> {
+                currentFiles == null -> {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1511,15 +1509,7 @@ private fun DownloadJsonPickerDialog(
                         CircularProgressIndicator(modifier = Modifier.size(24.dp))
                     }
                 }
-                unavailable -> {
-                    Text(
-                        text = "無法讀取下載資料夾，請用「瀏覽…」選取檔案\nCannot read the Download folder — use Browse instead",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-                }
-                currentFiles.isNullOrEmpty() -> {
+                currentFiles.isEmpty() -> {
                     Text(
                         text = "下載資料夾中沒有 JSON 檔案\nNo JSON files in the Download folder",
                         style = MaterialTheme.typography.bodySmall,
@@ -1528,9 +1518,8 @@ private fun DownloadJsonPickerDialog(
                     )
                 }
                 else -> {
-                    val list = currentFiles.orEmpty()
                     LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
-                        items(list, key = { it.uri.toString() }) { file ->
+                        items(currentFiles, key = { it.uri.toString() }) { file ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()

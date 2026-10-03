@@ -17,50 +17,74 @@ data class DownloadJsonFile(
 /**
  * Lists .json files in the Download folder without the system picker.
  *
- * Ghost files (stale entries for deleted/overwritten files) can appear because the
- * ExternalStorageProvider cursor may hold cached URI references or because MediaStore
- * indexing is out of sync. This class uses a two-phase approach to be ghost-proof:
+ * Ghost files (stale entries for deleted/overwritten files) are caused by the
+ * MediaStore/ExternalStorageProvider index holding cached URI references after a
+ * file is replaced or deleted. The system picker queries that index, not the
+ * physical drive, so ghost entries survive until a background rescan.
  *
- * **Phase 1 — File API (ground truth):** resolves each provider document ID to an
- * absolute path under the primary external-storage root and checks [File.exists].
- * This reads the real inode and is immune to provider caching, MediaStore indexing
- * delays, and SAF sandbox copies. Files that no longer exist on disk are dropped —
- * the earlier ghost version of a same-name file cannot survive. Works for files the
- * app created (exported schedule JSONs) on Android 11+ scoped storage.
+ * This class uses direct filesystem traversal ([File.listFiles]) as its primary
+ * path. It reads actual directory entries on disk, so deleted files disappear
+ * immediately — the same behaviour as the "Internal Storage" tab in the system
+ * file manager. Content URIs are built from the filesystem paths so the caller
+ * can still open them through [android.content.ContentResolver].
  *
- * **Phase 2 — Readability probe + dedup (fallback):** when the File API is blocked by
- * scoped storage (all [File.exists] checks return false because the files are owned
- * by other apps), falls back to an openFileDescriptor probe to drop unreadable stale
- * rows, then dedupes by name keeping the newest entry.
+ * Falls back to an ExternalStorageProvider tree query + readability probe on
+ * devices where scoped storage blocks the File API (Android 13+, API 33+).
  *
- * Both phases dedup by file name (case-insensitive) keeping the newest, so even if
- * two provider rows share a display name, only the latest one is shown.
- *
- * Returns files newest-first; emptyList when no readable .json files exist; null
- * when the well-known tree is unusable (caller should fall back to system picker).
+ * Returns files newest-first; empty when no readable .json files exist.
  */
 object DownloadJsonPicker {
 
-    /** Well-known ExternalStorageProvider tree for the Download folder (no grant needed). */
+    private const val EXTERNAL_STORAGE_AUTHORITY = "com.android.externalstorage.documents"
     private const val DOWNLOAD_TREE_URI =
         "content://com.android.externalstorage.documents/tree/primary%3ADownload"
 
-    private class Candidate(
-        val name: String,
-        val uri: Uri,
-        val providerModified: Long,
-        val docId: String
-    )
+    fun listDownloadJsonFiles(context: Context): List<DownloadJsonFile> {
+        // Phase 1 — Direct filesystem listing.
+        // Reads real directory entries, immune to MediaStore / provider caching.
+        val downloadDir = try {
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        } catch (e: Exception) {
+            null
+        }
 
-    fun listDownloadJsonFiles(context: Context): List<DownloadJsonFile>? {
+        if (downloadDir != null && downloadDir.isDirectory) {
+            val jsonFiles = downloadDir.listFiles { f ->
+                f.isFile && f.name.lowercase(Locale.ROOT).endsWith(".json")
+            }
+            if (jsonFiles != null && jsonFiles.isNotEmpty()) {
+                return jsonFiles
+                    .map { file ->
+                        val docId = "primary:Download/${file.name}"
+                        val uri = DocumentsContract.buildDocumentUri(
+                            EXTERNAL_STORAGE_AUTHORITY, docId
+                        )
+                        DownloadJsonFile(file.name, uri, file.lastModified())
+                    }
+                    .sortedByDescending { it.lastModifiedMillis }
+            }
+        }
+
+        // Phase 2 — Scoped storage blocked the File API.
+        // Fall back to ExternalStorageProvider tree query with readability probe.
+        return listViaProvider(context)
+    }
+
+    private fun listViaProvider(context: Context): List<DownloadJsonFile> {
         val treeUri = Uri.parse(DOWNLOAD_TREE_URI)
         val resolver = context.contentResolver
         val treeDocId = try {
             DocumentsContract.getTreeDocumentId(treeUri)
         } catch (e: Exception) {
-            return null
+            return emptyList()
         }
         val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, treeDocId)
+
+        data class Candidate(
+            val name: String,
+            val uri: Uri,
+            val modified: Long
+        )
 
         val candidates = mutableListOf<Candidate>()
         try {
@@ -88,52 +112,24 @@ object DownloadJsonPicker {
                     if (docId.isNullOrBlank()) continue
                     val modified = if (modCol >= 0 && !cursor.isNull(modCol)) cursor.getLong(modCol) else 0L
                     val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
-                    candidates.add(Candidate(name ?: docId, docUri, modified, docId))
+                    candidates.add(Candidate(name ?: docId, docUri, modified))
                 }
             }
         } catch (e: Exception) {
-            return null
+            return emptyList()
         }
 
         if (candidates.isEmpty()) return emptyList()
 
-        // Phase 1: File API — reads actual inodes, immune to provider caching / indexing delay.
-        val externalRoot = try {
-            Environment.getExternalStorageDirectory().absolutePath
-        } catch (e: Exception) {
-            null
-        }
-
-        if (externalRoot != null) {
-            val fileVerified = mutableListOf<DownloadJsonFile>()
-            for (c in candidates) {
-                val path = docIdToFilePath(c.docId, externalRoot) ?: continue
-                val file = File(path)
-                if (file.exists() && file.isFile) {
-                    fileVerified.add(DownloadJsonFile(c.name, c.uri, file.lastModified()))
-                }
-            }
-            if (fileVerified.isNotEmpty()) {
-                return dedupByNameKeepNewest(fileVerified)
-            }
-        }
-
-        // Phase 2: scoped storage blocked the File API — fall back to readability probe.
         val readable = candidates.filter { c ->
             try {
                 resolver.openFileDescriptor(c.uri, "r")?.use { true } ?: false
             } catch (e: Exception) {
                 false
             }
-        }.map { DownloadJsonFile(it.name, it.uri, it.providerModified) }
+        }.map { DownloadJsonFile(it.name, it.uri, it.modified) }
 
         return dedupByNameKeepNewest(readable)
-    }
-
-    /** Converts an ExternalStorageProvider document ID (e.g. `primary:Download/x.json`) to a path. */
-    private fun docIdToFilePath(docId: String, externalRoot: String): String? {
-        if (!docId.startsWith("primary:")) return null
-        return "$externalRoot/${docId.removePrefix("primary:")}"
     }
 
     /** Dedupes by name (case-insensitive) keeping the newest, sorted newest-first. */
