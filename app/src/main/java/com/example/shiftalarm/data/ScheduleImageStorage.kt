@@ -29,7 +29,7 @@ import java.util.Locale
  *
  * Full-res source is never kept: the saved JPEG is the possibly-downscaled one.
  */
-class ScheduleImageStorage(context: Context) {
+class ScheduleImageStorage(private val context: Context) {
 
     private val contentResolver = context.contentResolver
     private val dir = File(context.filesDir, DIR_NAME).apply { mkdirs() }
