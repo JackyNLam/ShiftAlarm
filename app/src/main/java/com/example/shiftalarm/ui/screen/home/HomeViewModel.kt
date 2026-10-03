@@ -288,7 +288,8 @@ class HomeViewModel(
 
                 // Save options first so the config survives even if the call fails
                 saveAiOptions(AiOptions(apiKey = apiKeyNormalized, model = resolvedModel, prompt = prompt))
-                appendAiLog("檢查通過: ${imageFile.name}（${imageFile.length()} bytes）")
+                val displayName = ScheduleImageStorage.originalNameOf(appContext, imageName)
+                appendAiLog("檢查通過: $displayName（${imageFile.name}，${imageFile.length()} bytes）")
                 appendAiLog("API Key（遮蔽）: ${maskApiKey(apiKeyNormalized)}（${apiKeyNormalized.length} 字元）")
 
                 val content = withContext(Dispatchers.IO) {

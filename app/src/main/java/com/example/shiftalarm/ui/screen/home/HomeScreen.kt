@@ -641,12 +641,14 @@ fun HomeScreen(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    // The file is written once at save time, so lastModified() is the
-                    // creation/modified time — show that instead of parsing the name.
+                    // Show the source file's modified time, captured at import;
+                    // images saved before it was recorded fall back to the copy's time.
                     if (file.exists()) {
+                        val displayTime = ScheduleImageStorage
+                            .originalModifiedOf(context, name) ?: file.lastModified()
                         Text(
                             text = "📷 " + SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
-                                .format(Date(file.lastModified())),
+                                .format(Date(displayTime)),
                             style = MaterialTheme.typography.labelSmall,
                             color = Color.White.copy(alpha = 0.7f)
                         )
@@ -875,6 +877,7 @@ private fun AiExtractSheet(
     onClearDebug: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var apiKey by remember { mutableStateOf(initialOptions.apiKey) }
     var showApiKey by remember { mutableStateOf(false) }
@@ -951,7 +954,8 @@ private fun AiExtractSheet(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = if (selectedImage.isNotBlank()) "🖼️ $selectedImage"
+                        text = if (selectedImage.isNotBlank())
+                            "🖼️ " + ScheduleImageStorage.originalNameOf(context, selectedImage)
                         else "請選擇排程圖片 / Select a schedule image",
                         modifier = Modifier.weight(1f),
                         maxLines = 1,
@@ -966,7 +970,11 @@ private fun AiExtractSheet(
                     scheduleImages.forEach { name ->
                         DropdownMenuItem(
                             text = {
-                                Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    ScheduleImageStorage.originalNameOf(context, name),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             },
                             onClick = {
                                 selectedImage = name
