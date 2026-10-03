@@ -162,7 +162,7 @@ fun HomeScreen(
         uri?.let { viewModel.importSchedule(it) }
     }
 
-    // Schedule-image import (photo of the paper schedule) — resized to 800px and stored.
+    // Schedule-image import (photo of the paper schedule) — downscaled to a 2000px max side and stored.
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->

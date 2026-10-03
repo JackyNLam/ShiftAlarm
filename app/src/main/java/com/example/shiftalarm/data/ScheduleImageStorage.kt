@@ -14,12 +14,13 @@ import android.provider.OpenableColumns
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Locale
 
 /**
  * Stores "schedule image" photos (pictures of the paper shift schedule) inside app
  * storage. Images are kept at original resolution unless the longer side exceeds
- * MAX_SIDE (4000px), in which case they are downscaled so the longer side becomes
- * exactly 4000px (EXIF rotation applied). The picker's original file name and
+ * MAX_SIDE (2000px), in which case they are downscaled so the longer side becomes
+ * exactly 2000px (EXIF rotation applied). The picker's original file name and
  * modified time are remembered separately so the viewer can show them instead of
  * the internal "img_<millis>.jpg" name / the import time.
  *
@@ -150,10 +151,72 @@ class ScheduleImageStorage(context: Context) {
             if (f.exists()) return SourceMeta(f.name, f.lastModified())
             return SourceMeta(null, null)
         }
-        return SourceMeta(
-            displayName = queryColumnString(uri, OpenableColumns.DISPLAY_NAME),
-            modifiedMillis = queryModifiedMillis(uri)
-        )
+        var displayName = queryColumnString(uri, OpenableColumns.DISPLAY_NAME)
+        var modifiedMillis = queryModifiedMillis(uri)
+        // Some providers (notably OEM photo pickers) reject column-projection
+        // queries or hide the standard column names, leaving both null. As a
+        // last resort, query with the provider's default projection and scan
+        // the returned column names for anything name- or modified-time-like.
+        if (displayName.isNullOrBlank() || modifiedMillis == null) {
+            val scanned = querySourceMetaByScan(uri)
+                ?: return SourceMeta(displayName, modifiedMillis)
+            if (displayName.isNullOrBlank() && !scanned.displayName.isNullOrBlank()) {
+                displayName = scanned.displayName
+            }
+            if (modifiedMillis == null && scanned.modifiedMillis != null) {
+                modifiedMillis = scanned.modifiedMillis
+            }
+        }
+        return SourceMeta(displayName, modifiedMillis)
+    }
+
+    /**
+     * Last-resort metadata lookup for pickers that hide the standard
+     * DISPLAY_NAME / last_modified / date_modified columns. Queries with the
+     * provider's default projection and scans the returned column names for
+     * anything that looks like a file name or a modified time.
+     */
+    private fun querySourceMetaByScan(uri: Uri): SourceMeta? = try {
+        contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            if (!cursor.moveToFirst()) return@use null
+            var displayName: String? = null
+            var modifiedMillis: Long? = null
+            for (col in cursor.columnNames) {
+                val low = col.lowercase(Locale.US)
+                if (displayName == null &&
+                    (low == "_display_name" || low == "display_name" ||
+                        low == "name" || low == "title" || low == "file_name")
+                ) {
+                    displayName = readString(cursor, col)
+                }
+                if (modifiedMillis == null &&
+                    (low.contains("modified") || low == "last_modified" ||
+                        low == "date_modified")
+                ) {
+                    // epoch seconds -> millis, like queryModifiedMillis
+                    val v = readLong(cursor, col)
+                    if (v != null && v > 0) {
+                        modifiedMillis = if (v < 10_000_000_000L) v * 1000 else v
+                    }
+                }
+                if (displayName != null && modifiedMillis != null) break
+            }
+            SourceMeta(displayName, modifiedMillis)
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun readString(cursor: Cursor, column: String): String? {
+        val idx = cursor.getColumnIndex(column)
+        return if (idx >= 0 && !cursor.isNull(idx)) cursor.getString(idx) else null
+    }
+
+    private fun readLong(cursor: Cursor, column: String): Long? {
+        val idx = cursor.getColumnIndex(column)
+        if (idx < 0 || cursor.isNull(idx)) return null
+        return if (cursor.getType(idx) == Cursor.FIELD_TYPE_INTEGER) cursor.getLong(idx)
+        else cursor.getString(idx)?.trim()?.toLongOrNull()
     }
 
     /**
@@ -256,7 +319,7 @@ class ScheduleImageStorage(context: Context) {
         const val DIR_NAME = "schedule_images"
         private const val PREFS_NAMES = "schedule_image_names"
         private const val PREFS_MODIFIED = "schedule_image_modified"
-        private const val MAX_SIDE = 4000
+        private const val MAX_SIDE = 2000
         private const val MAX_SOURCE_BYTES = 100 * 1024 * 1024
 
         /** Original picker name for [storedName], falling back to [storedName]. */
