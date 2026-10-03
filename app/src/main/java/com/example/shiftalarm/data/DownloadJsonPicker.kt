@@ -1,7 +1,6 @@
 package com.example.shiftalarm.data
 
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
 import java.util.Locale
@@ -20,77 +19,31 @@ data class DownloadJsonFile(
  * rows and can keep showing entries for files that were already deleted ("ghost"
  * files — e.g. an exported JSON the user removed still appears in the picker).
  *
- * This walks the real filesystem instead, through the ExternalStorageProvider tree
- * for the Download folder (`content://com.android.externalstorage.documents/...`),
- * so only files that actually exist are listed:
+ * This walks the real filesystem instead, via the well-known ExternalStorageProvider
+ * tree for the Download folder (`content://com.android.externalstorage.documents/...`),
+ * so only files that actually exist are listed. The walk is flat (direct children of
+ * `primary:Download` only), so files with the same name in other folders cannot leak
+ * into the list. No storage permission is required for this traversal on standard
+ * Android builds.
  *
- *  - Preferred tree: the Download-folder grant the user gives once via
- *    `OpenDocumentTree` (persisted with `takePersistableUriPermission`). On
- *    scoped-storage devices reading the Download folder really requires such a
- *    grant — without it the tree query/probe fails and the caller must prompt
- *    the user, not silently reopen the ghost-prone system picker.
- *  - Fallback tree: the well-known `primary:Download` tree, which several
- *    Android versions let apps browse without any grant. If even that fails,
- *    returns null.
+ * Ghost-proofing (handles "the earlier version of the same-name file keeps coming up"):
+ *  - Only files that can actually be opened right now are kept (readability probe via
+ *    openFileDescriptor), so deleted/stale provider rows are dropped.
+ *  - The result is deduped by file name (case-insensitive), keeping the newest entry,
+ *    so any duplicate provider rows or same-name copies collapse to the latest one.
  *
- * Returns the readable files newest-first; emptyList when the folder has no
- * readable .json files; null when no usable tree grant exists (the dialog then
- * shows a "Grant access" button instead of the system picker).
+ * Returns the files newest-first; emptyList when the folder has no readable .json
+ * files; null when the well-known tree is unusable on this device (callers should
+ * then fall back to the system picker).
  */
 object DownloadJsonPicker {
 
-    /** Well-known ExternalStorageProvider tree for the Download folder. */
-    const val DOWNLOAD_TREE_URI =
+    /** Well-known ExternalStorageProvider tree for the Download folder (no grant needed). */
+    private const val DOWNLOAD_TREE_URI =
         "content://com.android.externalstorage.documents/tree/primary%3ADownload"
 
-    private const val PREFS_NAME = "download_json_picker"
-    private const val KEY_GRANTED_TREE = "granted_tree_uri"
-
-    /** The Download-folder tree the user granted via OpenDocumentTree, if any. */
-    fun grantedTree(context: Context): Uri? =
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getString(KEY_GRANTED_TREE, null)
-            ?.takeIf { it.isNotBlank() }
-            ?.let { Uri.parse(it) }
-
-    /** Persists the user's folder grant so later imports never need the system picker. */
-    fun saveGrantedTree(context: Context, treeUri: Uri) {
-        try {
-            context.contentResolver.takePersistableUriPermission(
-                treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
-        } catch (e: Exception) {
-            // Some providers/OEMs refuse persistable grants; the grant still works
-            // for this session and will simply be re-requested next time.
-        }
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit().putString(KEY_GRANTED_TREE, treeUri.toString()).apply()
-    }
-
     fun listDownloadJsonFiles(context: Context): List<DownloadJsonFile>? {
-        grantedTree(context)?.let { granted ->
-            // A granted tree is authoritative: whatever it returns is the real list.
-            listWithTree(context, granted)?.let { return it }
-            // Query failed (grant revoked / folder moved) — fall through and try
-            // the well-known tree, then report null so the dialog re-prompts.
-        }
-        // No usable grant: try the well-known tree. If it lists candidates but
-        // none can be opened, it is unusable on this device → null → dialog asks
-        // the user for a grant (never the ghost-prone system picker).
-        return listWithTree(context, Uri.parse(DOWNLOAD_TREE_URI), unreadableMeansUnusable = true)
-    }
-
-    /**
-     * Lists .json files under [treeUri]. Null means the tree itself could not be
-     * used. Non-null means the query worked; unreadable candidates are dropped
-     * (result may be emptyList). When [unreadableMeansUnusable] and candidates
-     * were found but none opened, returns null — the caller should ask for a grant.
-     */
-    private fun listWithTree(
-        context: Context,
-        treeUri: Uri,
-        unreadableMeansUnusable: Boolean = false
-    ): List<DownloadJsonFile>? {
+        val treeUri = Uri.parse(DOWNLOAD_TREE_URI)
         val resolver = context.contentResolver
         val treeDocId = try {
             DocumentsContract.getTreeDocumentId(treeUri)
@@ -140,7 +93,15 @@ object DownloadJsonPicker {
                 false
             }
         }
-        if (unreadableMeansUnusable && readable.isEmpty()) return null
-        return readable.sortedByDescending { it.lastModifiedMillis }
+
+        // Dedupe by name (case-insensitive), keeping the newest entry per name, so an
+        // earlier version of a same-name file cannot appear alongside the latest one.
+        val deduped = readable
+            .groupBy { it.name.lowercase(Locale.ROOT) }
+            .mapValues { (_, list) -> list.maxByOrNull { it.lastModifiedMillis }!! }
+            .values
+            .sortedByDescending { it.lastModifiedMillis }
+
+        return deduped
     }
 }
