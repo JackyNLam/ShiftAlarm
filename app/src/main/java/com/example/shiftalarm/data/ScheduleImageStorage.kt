@@ -1,5 +1,6 @@
 package com.example.shiftalarm.data
 
+import android.content.ContentResolver
 import android.content.Context
 import android.database.Cursor
 import android.graphics.Bitmap
