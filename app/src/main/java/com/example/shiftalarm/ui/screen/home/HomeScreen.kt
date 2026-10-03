@@ -557,10 +557,9 @@ fun HomeScreen(
     // Full-screen viewer for a saved schedule image — whole image, fitted
     viewingImage?.let { name ->
         val context = LocalContext.current
+        val file = File(context.filesDir, ScheduleImageStorage.DIR_NAME).resolve(name)
         val bitmap by produceState<android.graphics.Bitmap?>(initialValue = null, name) {
             value = withContext(Dispatchers.IO) {
-                val file = File(context.filesDir, ScheduleImageStorage.DIR_NAME)
-                    .resolve(name)
                 if (file.exists())
                     android.graphics.BitmapFactory.decodeFile(file.absolutePath)
                 else null
@@ -636,16 +635,18 @@ fun HomeScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = name,
+                        text = ScheduleImageStorage.originalNameOf(context, name),
                         style = MaterialTheme.typography.labelSmall,
                         color = Color.White.copy(alpha = 0.9f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    name.removePrefix("img_").removeSuffix(".jpg").toLongOrNull()?.let { millis ->
+                    // The file is written once at save time, so lastModified() is the
+                    // creation/modified time — show that instead of parsing the name.
+                    if (file.exists()) {
                         Text(
                             text = "📷 " + SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
-                                .format(Date(millis)),
+                                .format(Date(file.lastModified())),
                             style = MaterialTheme.typography.labelSmall,
                             color = Color.White.copy(alpha = 0.7f)
                         )

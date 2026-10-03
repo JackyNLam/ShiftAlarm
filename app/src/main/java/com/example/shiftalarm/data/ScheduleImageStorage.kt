@@ -6,21 +6,27 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
+import android.provider.OpenableColumns
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
 
 /**
  * Stores "schedule image" photos (pictures of the paper shift schedule) inside app
- * storage, resized to at most 1000px wide (EXIF rotation applied) so the originals
- * are cheap to keep, view and re-run through AI extraction.
+ * storage. Images are kept at original resolution unless the longer side exceeds
+ * MAX_SIDE (4000px), in which case they are downscaled so the longer side becomes
+ * exactly 4000px (EXIF rotation applied). The picker's original file name is
+ * remembered separately so the viewer can show it instead of the internal
+ * "img_<millis>.jpg" name.
  *
- * Full-res source is never kept: the saved JPEG is the resized one.
+ * Full-res source is never kept: the saved JPEG is the possibly-downscaled one.
  */
 class ScheduleImageStorage(context: Context) {
 
     private val contentResolver = context.contentResolver
     private val dir = File(context.filesDir, DIR_NAME).apply { mkdirs() }
+    private val namePrefs =
+        context.getSharedPreferences(PREFS_NAMES, Context.MODE_PRIVATE)
 
     /** Saves the image at [uri], returns the stored file name ("img_<millis>.jpg"). */
     fun saveImage(uri: Uri): String {
@@ -56,24 +62,40 @@ class ScheduleImageStorage(context: Context) {
             orientation == ExifInterface.ORIENTATION_TRANSPOSE ||
             orientation == ExifInterface.ORIENTATION_TRANSVERSE
         val effectiveWidth = if (swapped) bounds.outHeight else bounds.outWidth
+        val effectiveHeight = if (swapped) bounds.outWidth else bounds.outHeight
+        val effectiveMaxSide = maxOf(effectiveWidth, effectiveHeight)
 
-        // 3. Sample down close to target width, then decode.
-        val sample = sampleSizeFor(effectiveWidth, TARGET_WIDTH)
+        // 3. Keep the original resolution unless the longer side exceeds MAX_SIDE;
+        //    only then sample down (decoded long side is at most ~2x MAX_SIDE) and
+        //    later scale precisely to MAX_SIDE.
+        val sample = if (effectiveMaxSide > MAX_SIDE) {
+            sampleSizeFor(effectiveMaxSide, MAX_SIDE)
+        } else 1
         val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sample }
         val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts)
             ?: throw IllegalStateException("無法解碼圖片 / Cannot decode image")
 
-        // 4. Rotate according to EXIF, then scale exactly to target width.
+        // 4. Rotate according to EXIF, then scale only if the longer side > MAX_SIDE
+        //    so the longer side becomes exactly MAX_SIDE.
         val rotated = applyExifRotation(decoded, orientation)
-        val finalWidth = if (rotated.width > TARGET_WIDTH) TARGET_WIDTH else rotated.width
-        val finalHeight = (rotated.height.toLong() * finalWidth / rotated.width).toInt()
-            .coerceAtLeast(1)
-        val resized = if (finalWidth == rotated.width) rotated
-        else Bitmap.createScaledBitmap(rotated, finalWidth, finalHeight, true)
+        val resized = if (effectiveMaxSide > MAX_SIDE) {
+            val longSide = maxOf(rotated.width, rotated.height)
+            val scale = MAX_SIDE.toFloat() / longSide
+            val finalWidth = (rotated.width * scale).toInt().coerceAtLeast(1)
+            val finalHeight = (rotated.height * scale).toInt().coerceAtLeast(1)
+            Bitmap.createScaledBitmap(rotated, finalWidth, finalHeight, true)
+        } else rotated
 
         val name = "img_${System.currentTimeMillis()}.jpg"
         FileOutputStream(File(dir, name)).use { out ->
             resized.compress(Bitmap.CompressFormat.JPEG, 85, out)
+        }
+
+        // Remember the picker's original file name so the viewer can show it
+        // (internal names are img_<millis>.jpg and meaningless to the user).
+        val displayName = queryDisplayName(uri)
+        if (!displayName.isNullOrBlank()) {
+            namePrefs.edit().putString(name, displayName.trim()).apply()
         }
 
         // Recycle intermediate bitmaps we no longer need (identity checks avoid
@@ -94,6 +116,23 @@ class ScheduleImageStorage(context: Context) {
 
     fun delete(name: String) {
         File(dir, name).delete()
+        namePrefs.edit().remove(name).apply()
+    }
+
+    /** Best-effort display name of the picked file (null if the provider hides it). */
+    private fun queryDisplayName(uri: Uri): String? = try {
+        contentResolver.query(
+            uri,
+            arrayOf(OpenableColumns.DISPLAY_NAME),
+            null, null, null
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0) cursor.getString(idx) else null
+            } else null
+        }
+    } catch (_: Exception) {
+        null
     }
 
     private fun sampleSizeFor(sourceWidth: Int, targetWidth: Int): Int {
@@ -128,7 +167,14 @@ class ScheduleImageStorage(context: Context) {
 
     companion object {
         const val DIR_NAME = "schedule_images"
-        private const val TARGET_WIDTH = 1000
+        private const val PREFS_NAMES = "schedule_image_names"
+        private const val MAX_SIDE = 4000
         private const val MAX_SOURCE_BYTES = 100 * 1024 * 1024
+
+        /** Original picker name for [storedName], falling back to [storedName]. */
+        fun originalNameOf(context: Context, storedName: String): String {
+            val prefs = context.getSharedPreferences(PREFS_NAMES, Context.MODE_PRIVATE)
+            return prefs.getString(storedName, null) ?: storedName
+        }
     }
 }
