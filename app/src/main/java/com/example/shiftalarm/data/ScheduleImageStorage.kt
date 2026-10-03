@@ -1,13 +1,16 @@
 package com.example.shiftalarm.data
 
+import android.Manifest
 import android.content.ContentResolver
 import android.content.Context
+import android.content.pm.PackageManager
 import android.database.Cursor
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
+import android.os.Build
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
@@ -159,15 +162,116 @@ class ScheduleImageStorage(context: Context) {
         // the returned column names for anything name- or modified-time-like.
         if (displayName.isNullOrBlank() || modifiedMillis == null) {
             val scanned = querySourceMetaByScan(uri)
-                ?: return SourceMeta(displayName, modifiedMillis)
-            if (displayName.isNullOrBlank() && !scanned.displayName.isNullOrBlank()) {
-                displayName = scanned.displayName
+            if (scanned != null) {
+                if (displayName.isNullOrBlank() && !scanned.displayName.isNullOrBlank()) {
+                    displayName = scanned.displayName
+                }
+                if (modifiedMillis == null && scanned.modifiedMillis != null) {
+                    modifiedMillis = scanned.modifiedMillis
+                }
             }
-            if (modifiedMillis == null && scanned.modifiedMillis != null) {
-                modifiedMillis = scanned.modifiedMillis
+        }
+        // The system photo picker (content://media/picker/.../media/<id>) hides
+        // the real file name: DISPLAY_NAME comes back as the MediaStore _ID or a
+        // synthesized "<id>.jpg" (issuetracker 268079113). Map the embedded id
+        // back to the real MediaStore row when media-read access is granted, and
+        // let those ground-truth values override the synthesized ones.
+        resolveMediaStoreMeta(uri)?.let { real ->
+            if (!real.displayName.isNullOrBlank() &&
+                (displayName.isNullOrBlank() || looksSynthesized(displayName))
+            ) {
+                displayName = real.displayName
+            }
+            if (real.modifiedMillis != null && (modifiedMillis == null || modifiedMillis <= 0)) {
+                modifiedMillis = real.modifiedMillis
             }
         }
         return SourceMeta(displayName, modifiedMillis)
+    }
+
+    /** True when [name] looks like a provider-synthesized "<id>.jpg" instead of a real file name. */
+    private fun looksSynthesized(name: String?): Boolean {
+        if (name.isNullOrBlank()) return true
+        val stem = name.substringBeforeLast('.', name).trim()
+        return stem.isNotEmpty() && stem.all { it.isDigit() }
+    }
+
+    /**
+     * Extracts a MediaStore row id from picker/media/document URIs:
+     * content://media/picker/<session>/.../media/61479 -> 61479,
+     * content://media/external/images/media/61479 -> 61479,
+     * content://.../document/image%3A61479 -> 61479.
+     */
+    private fun mediaIdFromUri(uri: Uri): Long? {
+        val segments = uri.pathSegments ?: return null
+        for (i in segments.indices.reversed()) {
+            val seg = segments[i]
+            val pure = seg.toLongOrNull()
+            if (pure != null && pure > 0 &&
+                (i == segments.lastIndex || segments.getOrNull(i - 1) == "media")
+            ) {
+                return pure
+            }
+            val afterColon = Uri.decode(seg).substringAfterLast(':').toLongOrNull()
+            if (afterColon != null && afterColon > 0) return afterColon
+        }
+        return null
+    }
+
+    /**
+     * Maps the MediaStore id embedded in photo-picker URIs back to the real row,
+     * returning the true file name + modified time. Requires media-read access
+     * (READ_MEDIA_IMAGES on 13+, READ_EXTERNAL_STORAGE below); the photo picker
+     * itself is permissionless and grants no access to MediaStore.
+     */
+    private fun resolveMediaStoreMeta(uri: Uri): SourceMeta? {
+        val id = mediaIdFromUri(uri) ?: return null
+        if (!hasMediaReadAccess()) return null
+        return try {
+            val projection = arrayOf(
+                MediaStore.Images.Media.DISPLAY_NAME,
+                MediaStore.Images.Media.DATE_MODIFIED
+            )
+            val queryUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+            } else {
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            }
+            contentResolver.query(
+                queryUri,
+                projection,
+                "${MediaStore.Images.Media._ID}=?",
+                arrayOf(id.toString()),
+                null
+            )?.use { cursor ->
+                if (!cursor.moveToFirst()) return@use null
+                val name = readString(cursor, MediaStore.Images.Media.DISPLAY_NAME)
+                val modified = readLong(cursor, MediaStore.Images.Media.DATE_MODIFIED)?.let { raw ->
+                    if (raw > 0) {
+                        // MediaStore date_modified is epoch seconds -> millis
+                        if (raw < 10_000_000_000L) raw * 1000 else raw
+                    } else null
+                }
+                SourceMeta(name, modified)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Whether the app may read other apps' media from MediaStore. */
+    private fun hasMediaReadAccess(): Boolean = when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE ->
+            context.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) ==
+                PackageManager.PERMISSION_GRANTED ||
+                context.checkSelfPermission(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) ==
+                PackageManager.PERMISSION_GRANTED
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ->
+            context.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) ==
+                PackageManager.PERMISSION_GRANTED
+        else ->
+            context.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) ==
+                PackageManager.PERMISSION_GRANTED
     }
 
     /**

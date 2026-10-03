@@ -1,6 +1,10 @@
 package com.example.shiftalarm.ui.screen.home
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -167,6 +171,36 @@ fun HomeScreen(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let { viewModel.importScheduleImage(it) }
+    }
+
+    // The Android photo picker only reveals the MediaStore _ID of the picked
+    // photo, so the real file name + modified time are looked up in MediaStore
+    // afterwards — that needs READ_MEDIA_IMAGES / READ_EXTERNAL_STORAGE. Ask
+    // BEFORE the picker runs (the picked URI can only be read once).
+    val context = LocalContext.current
+    val scheduleImagePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            Toast.makeText(
+                context,
+                "未授權讀取相片，檔名/時間可能無法正確顯示 / Allow photo access to show real file names",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+        imagePickerLauncher.launch("image/*")
+    }
+    val pickScheduleImage: () -> Unit = {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_IMAGES
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+        if (context.checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
+            scheduleImagePermissionLauncher.launch(permission)
+        } else {
+            imagePickerLauncher.launch("image/*")
+        }
     }
 
     // AI result export — same JSON format as import/export schedule
@@ -753,7 +787,7 @@ fun HomeScreen(
                         )
                     }
                     item(key = "add_image") {
-                        AddImageTile { imagePickerLauncher.launch("image/*") }
+                        AddImageTile { pickScheduleImage() }
                     }
                 }
                 Spacer(modifier = Modifier.height(16.dp))
