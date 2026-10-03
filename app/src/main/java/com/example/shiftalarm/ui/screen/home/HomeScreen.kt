@@ -7,10 +7,12 @@ import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
@@ -25,6 +27,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -39,6 +42,7 @@ import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
@@ -72,16 +76,22 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -94,10 +104,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.shiftalarm.data.DownloadJsonFile
+import com.example.shiftalarm.data.DownloadJsonPicker
 import com.example.shiftalarm.data.ScheduleImageStorage
 import com.example.shiftalarm.data.repository.ShiftRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
@@ -150,6 +163,7 @@ fun HomeScreen(
     // --- Import / Export state and launchers ---
     var showAiSheet by remember { mutableStateOf(false) }
     var showImageManager by remember { mutableStateOf(false) }
+    var showImportPicker by remember { mutableStateOf(false) }
     var viewingImage by remember { mutableStateOf<String?>(null) }
     var pendingDeleteImage by remember { mutableStateOf<String?>(null) }
 
@@ -523,7 +537,7 @@ fun HomeScreen(
                     ScheduleActionCard(
                         icon = Icons.Default.FileUpload,
                         text = "📥 匯入排程\nImport Schedule",
-                        onClick = { importFileLauncher.launch(arrayOf("application/json")) }
+                        onClick = { showImportPicker = true }
                     )
                     ScheduleActionCard(
                         icon = Icons.Default.Image,
@@ -714,6 +728,22 @@ fun HomeScreen(
         }
     }
 
+    // Import schedule: the app's own Download-folder list is shown first — the
+    // system picker can display ghost entries of JSON files already deleted.
+    if (showImportPicker) {
+        DownloadJsonPickerDialog(
+            onPick = { uri ->
+                showImportPicker = false
+                viewModel.importSchedule(uri)
+            },
+            onBrowse = {
+                showImportPicker = false
+                importFileLauncher.launch(arrayOf("application/json"))
+            },
+            onDismiss = { showImportPicker = false }
+        )
+    }
+
     // AI extraction bottom sheet
     if (showAiSheet) {
         AiExtractSheet(
@@ -723,8 +753,8 @@ fun HomeScreen(
             result = state.aiResult,
             debugLog = state.aiDebugLog,
             startedAt = state.aiStartedAt,
-            onExtract = { key, model, prompt, imageName ->
-                viewModel.extractScheduleWithAi(key, model, prompt, imageName)
+            onExtract = { key, model, prompt, imageName, cropFile ->
+                viewModel.extractScheduleWithAi(key, model, prompt, imageName, cropFile)
             },
             onClearDebug = viewModel::clearAiDebugLog,
             onDismiss = { showAiSheet = false }
@@ -907,7 +937,7 @@ private fun AiExtractSheet(
     result: String?,
     debugLog: String,
     startedAt: Long?,
-    onExtract: (apiKey: String, model: String, prompt: String, imageName: String) -> Unit,
+    onExtract: (apiKey: String, model: String, prompt: String, imageName: String, cropFile: File?) -> Unit,
     onClearDebug: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -919,6 +949,10 @@ private fun AiExtractSheet(
     var prompt by remember { mutableStateOf(initialOptions.prompt) }
     var selectedImage by remember { mutableStateOf(scheduleImages.firstOrNull() ?: "") }
     var menuExpanded by remember { mutableStateOf(false) }
+    // Optional ✂️ region crop — only that part of the image is sent to the AI.
+    var cropBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var showCropDialog by remember { mutableStateOf(false) }
+    val extractScope = rememberCoroutineScope()
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
@@ -1019,6 +1053,71 @@ private fun AiExtractSheet(
                 }
             }
 
+            // ✂️ Optional region crop — only the selected part is sent to the AI
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedButton(
+                    onClick = { showCropDialog = true },
+                    enabled = selectedImage.isNotBlank() && !isBusy,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        Icons.Default.ContentCut,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (cropBitmap != null)
+                            "✂️ 已選擇區域 ${cropBitmap.width}×${cropBitmap.height}"
+                        else "✂️ 選擇區域 / Select region",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                if (cropBitmap != null) {
+                    TextButton(onClick = { cropBitmap = null }) {
+                        Text(
+                            "清除 / Clear",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
+            }
+            cropBitmap?.let { crop ->
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(120.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .border(1.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp))
+                ) {
+                    Image(
+                        bitmap = crop.asImageBitmap(),
+                        contentDescription = "已選擇區域 / Selected region",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+            if (showCropDialog && selectedImage.isNotBlank()) {
+                AiCropDialog(
+                    fileName = selectedImage,
+                    onConfirm = { bmp ->
+                        cropBitmap = bmp
+                        showCropDialog = false
+                    },
+                    onUseWhole = {
+                        cropBitmap = null
+                        showCropDialog = false
+                    },
+                    onDismiss = { showCropDialog = false }
+                )
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
 
             result?.let { msg ->
@@ -1035,7 +1134,28 @@ private fun AiExtractSheet(
 
             Button(
                 onClick = {
-                    onExtract(apiKey.trim(), model.trim(), prompt.trim(), selectedImage)
+                    val crop = cropBitmap
+                    if (crop == null) {
+                        onExtract(apiKey.trim(), model.trim(), prompt.trim(), selectedImage, null)
+                    } else {
+                        extractScope.launch {
+                            val cropFile = withContext(Dispatchers.IO) {
+                                val dir = context.cacheDir
+                                dir.listFiles { f -> f.name.startsWith("ai_crop_") }
+                                    ?.forEach { it.delete() }
+                                val f = File(dir, "ai_crop_${System.currentTimeMillis()}.jpg")
+                                f.outputStream().use { out ->
+                                    crop.compress(
+                                        android.graphics.Bitmap.CompressFormat.JPEG,
+                                        90,
+                                        out
+                                    )
+                                }
+                                f
+                            }
+                            onExtract(apiKey.trim(), model.trim(), prompt.trim(), selectedImage, cropFile)
+                        }
+                    }
                 },
                 enabled = !isBusy && selectedImage.isNotBlank() && apiKey.isNotBlank(),
                 modifier = Modifier.fillMaxWidth()
@@ -1114,6 +1234,344 @@ private fun AiExtractSheet(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Full-screen region selector for AI extraction: the user drags a rectangle over
+ * the schedule image; only that cropped area is later sent to the AI.
+ */
+@Composable
+private fun AiCropDialog(
+    fileName: String,
+    onConfirm: (android.graphics.Bitmap) -> Unit,
+    onUseWhole: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val bitmap by produceState<android.graphics.Bitmap?>(initialValue = null, fileName) {
+        value = withContext(Dispatchers.IO) {
+            val file = File(context.filesDir, ScheduleImageStorage.DIR_NAME).resolve(fileName)
+            if (file.exists()) android.graphics.BitmapFactory.decodeFile(file.absolutePath) else null
+        }
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+        ) {
+            val bmp = bitmap
+            if (bmp == null) {
+                CircularProgressIndicator(
+                    color = Color.White,
+                    modifier = Modifier.align(Alignment.Center)
+                )
+            } else {
+                var containerSize by remember { mutableStateOf(Offset.Zero) }
+                var selStart by remember(bmp) { mutableStateOf<Offset?>(null) }
+                var selEnd by remember(bmp) { mutableStateOf<Offset?>(null) }
+
+                val imgRect = fittedImageRect(containerSize.x, containerSize.y, bmp.width, bmp.height)
+                val start = selStart
+                val end = selEnd
+                val selection = if (start != null && end != null) {
+                    Rect(
+                        minOf(start.x, end.x), minOf(start.y, end.y),
+                        maxOf(start.x, end.x), maxOf(start.y, end.y)
+                    )
+                } else null
+                // The selection must map to at least 16×16 px in the actual bitmap
+                val selectionValid = selection != null && imgRect.width > 0f &&
+                    imgRect.height > 0f &&
+                    (selection.width / imgRect.width * bmp.width) >= 16f &&
+                    (selection.height / imgRect.height * bmp.height) >= 16f
+
+                Image(
+                    bitmap = bmp.asImageBitmap(),
+                    contentDescription = fileName,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                // Dim everything outside the selection and outline it
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .onSizeChanged {
+                            containerSize = Offset(it.width.toFloat(), it.height.toFloat())
+                        }
+                        .pointerInput(bmp) {
+                            detectDragGestures(
+                                onDragStart = { offset ->
+                                    val rect = fittedImageRect(
+                                        containerSize.x, containerSize.y, bmp.width, bmp.height
+                                    )
+                                    selStart = clampToImage(offset, rect)
+                                    selEnd = selStart
+                                },
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    val rect = fittedImageRect(
+                                        containerSize.x, containerSize.y, bmp.width, bmp.height
+                                    )
+                                    selEnd = clampToImage(change.position, rect)
+                                }
+                            )
+                        }
+                ) {
+                    if (selection != null && imgRect.width > 0f && imgRect.height > 0f &&
+                        selection.width >= 4f && selection.height >= 4f
+                    ) {
+                        val dim = Color.Black.copy(alpha = 0.55f)
+                        // top / bottom / left / right bands around the selection
+                        drawRect(
+                            dim,
+                            topLeft = Offset(0f, 0f),
+                            size = Size(size.width, selection.top)
+                        )
+                        drawRect(
+                            dim,
+                            topLeft = Offset(0f, selection.bottom),
+                            size = Size(size.width, size.height - selection.bottom)
+                        )
+                        drawRect(
+                            dim,
+                            topLeft = Offset(0f, selection.top),
+                            size = Size(selection.left, selection.height)
+                        )
+                        drawRect(
+                            dim,
+                            topLeft = Offset(selection.right, selection.top),
+                            size = Size(size.width - selection.right, selection.height)
+                        )
+                        drawRect(
+                            Color.White,
+                            topLeft = Offset(selection.left, selection.top),
+                            size = Size(selection.width, selection.height),
+                            style = Stroke(width = 2.dp.toPx())
+                        )
+                    }
+                }
+
+                // Top bar: instructions + close
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.TopCenter)
+                        .padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "✂️ 拖曳選取要傳送給 AI 的範圍\nDrag to select the region to send to AI",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "關閉 / Close",
+                            tint = Color.White
+                        )
+                    }
+                }
+
+                // Bottom actions
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.BottomCenter)
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text("取消 / Cancel", color = Color.White)
+                    }
+                    TextButton(onClick = onUseWhole) {
+                        Text("整張 / Whole image", color = Color.White)
+                    }
+                    Button(
+                        onClick = {
+                            val sel = selection
+                            val rect = imgRect
+                            if (sel != null && rect.width > 0f && rect.height > 0f) {
+                                val scaleX = bmp.width / rect.width
+                                val scaleY = bmp.height / rect.height
+                                val px = (sel.left - rect.left) * scaleX
+                                val py = (sel.top - rect.top) * scaleY
+                                val pw = sel.width * scaleX
+                                val ph = sel.height * scaleY
+                                val cropRect = android.graphics.Rect(
+                                    px.toInt().coerceIn(0, bmp.width),
+                                    py.toInt().coerceIn(0, bmp.height),
+                                    (px + pw).toInt().coerceIn(0, bmp.width),
+                                    (py + ph).toInt().coerceIn(0, bmp.height)
+                                )
+                                if (cropRect.width() >= 16 && cropRect.height() >= 16) {
+                                    val cropped = android.graphics.Bitmap.createBitmap(
+                                        bmp,
+                                        cropRect.left,
+                                        cropRect.top,
+                                        cropRect.width(),
+                                        cropRect.height()
+                                    )
+                                    onConfirm(cropped)
+                                }
+                            }
+                        },
+                        enabled = selectionValid,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("使用選取範圍 / Use region")
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** The display rectangle the fitted image occupies inside a [containerW]×[containerH] area. */
+private fun fittedImageRect(containerW: Float, containerH: Float, bmpW: Int, bmpH: Int): Rect {
+    if (containerW <= 0f || containerH <= 0f || bmpW <= 0 || bmpH <= 0) {
+        return Rect(0f, 0f, 0f, 0f)
+    }
+    val scale = minOf(containerW / bmpW, containerH / bmpH)
+    val w = bmpW * scale
+    val h = bmpH * scale
+    return Rect(
+        (containerW - w) / 2f,
+        (containerH - h) / 2f,
+        (containerW + w) / 2f,
+        (containerH + h) / 2f
+    )
+}
+
+/** Clamps a pointer position into the fitted image rectangle. */
+private fun clampToImage(offset: Offset, imageRect: Rect): Offset = Offset(
+    offset.x.coerceIn(imageRect.left, imageRect.right),
+    offset.y.coerceIn(imageRect.top, imageRect.bottom)
+)
+
+/**
+ * In-app picker for the schedule JSON import: lists .json files in the Download
+ * folder (newest first) by walking the real filesystem, so already-deleted files
+ * never appear. A "Browse…" fallback still opens the system picker.
+ */
+@Composable
+private fun DownloadJsonPickerDialog(
+    onPick: (Uri) -> Unit,
+    onBrowse: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    var files by remember { mutableStateOf<List<DownloadJsonFile>?>(null) }
+    var unavailable by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        val listed = withContext(Dispatchers.IO) {
+            DownloadJsonPicker.listDownloadJsonFiles(context)
+        }
+        if (listed == null) unavailable = true else files = listed
+    }
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .padding(16.dp)
+        ) {
+            Text(
+                text = "匯入排程 / Import Schedule",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "下載資料夾中的 JSON 檔案（最新的在上面）\nJSON files in the Download folder (newest first)",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            val currentFiles = files
+            when {
+                currentFiles == null && !unavailable -> {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 24.dp),
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                    }
+                }
+                unavailable -> {
+                    Text(
+                        text = "無法讀取下載資料夾，請用「瀏覽…」選取檔案\nCannot read the Download folder — use Browse instead",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+                }
+                currentFiles.isNullOrEmpty() -> {
+                    Text(
+                        text = "下載資料夾中沒有 JSON 檔案\nNo JSON files in the Download folder",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+                }
+                else -> {
+                    val list = currentFiles.orEmpty()
+                    LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+                        items(list, key = { it.uri.toString() }) { file ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onPick(file.uri) }
+                                    .padding(vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.FileDownload,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = file.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (file.lastModifiedMillis > 0) {
+                                        Text(
+                                            text = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
+                                                .format(Date(file.lastModifiedMillis)),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                TextButton(onClick = onDismiss) { Text("取消 / Cancel") }
+                TextButton(onClick = onBrowse) { Text("瀏覽… / Browse…") }
             }
         }
     }

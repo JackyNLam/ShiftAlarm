@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.nio.charset.Charset
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -266,8 +267,18 @@ class HomeViewModel(
      * Asks DashScope to parse the selected schedule image into import/export-format
      * JSON, then stages the JSON for export (pendingAiExportJson) — the UI auto-opens
      * a "save as" dialog so the result lands in the same format the app imports.
+     *
+     * [cropFile] — when the user selected only a region of the image (✂️), the cropped
+     * JPEG is sent to the AI instead of the full image; [imageName] still identifies
+     * the source schedule image for logging/display purposes.
      */
-    fun extractScheduleWithAi(apiKey: String, model: String, prompt: String, imageName: String) {
+    fun extractScheduleWithAi(
+        apiKey: String,
+        model: String,
+        prompt: String,
+        imageName: String,
+        cropFile: File? = null
+    ) {
         viewModelScope.launch {
             val resolvedModel = model.ifBlank { "qwen-vl-plus" }
             _uiState.update {
@@ -283,11 +294,12 @@ class HomeViewModel(
                 val apiKeyNormalized = normalizeApiKey(apiKey)
                 if (apiKeyNormalized.isBlank()) throw Exception("請輸入 DashScope API Key")
                 if (imageName.isBlank()) throw Exception("請選擇排程圖片 / Select a schedule image")
-                val imageFile = imageStorage.fileFor(imageName)
+                val imageFile = cropFile ?: imageStorage.fileFor(imageName)
                 if (!imageFile.exists()) throw Exception("圖片不存在 / Image not found: $imageName")
 
                 // Save options first so the config survives even if the call fails
                 saveAiOptions(AiOptions(apiKey = apiKeyNormalized, model = resolvedModel, prompt = prompt))
+                if (cropFile != null) appendAiLog("✂️ 只傳送選取的區域（${imageFile.name}）")
                 val displayName = ScheduleImageStorage.originalNameOf(appContext, imageName)
                 appendAiLog("檢查通過: $displayName（${imageFile.name}，${imageFile.length()} bytes）")
                 appendAiLog("API Key（遮蔽）: ${maskApiKey(apiKeyNormalized)}（${apiKeyNormalized.length} 字元）")
