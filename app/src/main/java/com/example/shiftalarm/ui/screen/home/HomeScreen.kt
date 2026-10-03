@@ -177,19 +177,7 @@ fun HomeScreen(
     val importFileLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
-        uri?.let {
-            try {
-                context.contentResolver.openInputStream(it)?.use { _ -> }
-            } catch (e: Exception) {
-                Toast.makeText(
-                    context,
-                    "該檔案已被刪除，請重新選擇 / File was deleted, please select another",
-                    Toast.LENGTH_LONG
-                ).show()
-                return@rememberLauncherForActivityResult
-            }
-            viewModel.importSchedule(it)
-        }
+        uri?.let { viewModel.importSchedule(it) }
     }
 
     // Schedule-image import (photo of the paper schedule) — downscaled to a 2000px max side and stored.
