@@ -180,6 +180,19 @@ fun HomeScreen(
         uri?.let { viewModel.importSchedule(it) }
     }
 
+    // Schedule-image import (photo of the paper schedule) — downscaled to a 2000px max side and stored.
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let { viewModel.importScheduleImage(it) }
+    }
+
+    // The Android photo picker only reveals the MediaStore _ID of the picked
+    // photo, so the real file name + modified time are looked up in MediaStore
+    // afterwards — that needs READ_MEDIA_IMAGES / READ_EXTERNAL_STORAGE. Ask
+    // BEFORE the picker runs (the picked URI can only be read once).
+    val context = LocalContext.current
+
     // Folder picker for the in-app import dialog — lets the user choose a
     // different folder when the Download directory cannot be read (API 33+).
     val pickerScope = rememberCoroutineScope()
@@ -196,18 +209,6 @@ fun HomeScreen(
         }
     }
 
-    // Schedule-image import (photo of the paper schedule) — downscaled to a 2000px max side and stored.
-    val imagePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        uri?.let { viewModel.importScheduleImage(it) }
-    }
-
-    // The Android photo picker only reveals the MediaStore _ID of the picked
-    // photo, so the real file name + modified time are looked up in MediaStore
-    // afterwards — that needs READ_MEDIA_IMAGES / READ_EXTERNAL_STORAGE. Ask
-    // BEFORE the picker runs (the picked URI can only be read once).
-    val context = LocalContext.current
     val scheduleImagePermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
