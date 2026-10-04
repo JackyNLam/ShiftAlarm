@@ -1570,10 +1570,26 @@ private fun DownloadJsonPickerDialog(
                         modifier = Modifier.padding(vertical = 8.dp)
                     )
                     // Standalone button to grant folder access — not in the same row as Cancel.
-                    if (!hasPersistedUri && onGrantAccess != null) {
+                    // Always visible when onGrantAccess is provided, even when a persisted
+                    // URI already exists — the user may need to re-select if the folder is wrong.
+                    if (onGrantAccess != null) {
                         Spacer(modifier = Modifier.height(12.dp))
+                        if (hasPersistedUri) {
+                            // A stale/wrong persisted URI — offer to clear and re-select.
+                            Text(
+                                text = "已設定資料夾但找不到 JSON 檔案，請重新選擇\nA folder was set but no JSON files found — please re-select",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(bottom = 4.dp)
+                            )
+                        }
                         Button(
-                            onClick = onGrantAccess,
+                            onClick = {
+                                if (hasPersistedUri) {
+                                    DownloadJsonPicker.clearPersistedTreeUri(context)
+                                }
+                                onGrantAccess()
+                            },
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Icon(
@@ -1582,7 +1598,10 @@ private fun DownloadJsonPickerDialog(
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("選擇匯入資料夾 / Set Import Folder")
+                            Text(
+                                if (hasPersistedUri) "重新選擇資料夾 / Re-select Folder"
+                                else "選擇匯入資料夾 / Set Import Folder"
+                            )
                         }
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
