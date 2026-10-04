@@ -17,7 +17,7 @@ data class DownloadJsonFile(
 )
 
 /**
- * Lists .json files in the Download folder without the system picker.
+ * Lists .json files without the system picker, defaulting to Documents/ShiftAlarm.
  *
  * Ghost files (stale entries for deleted/overwritten files) are caused by the
  * MediaStore/ExternalStorageProvider index holding cached URI references after a
@@ -30,8 +30,9 @@ data class DownloadJsonFile(
  * file manager. Content URIs are built from the filesystem paths so the caller
  * can still open them through [android.content.ContentResolver].
  *
- * Falls back to an ExternalStorageProvider tree query + readability probe on
- * devices where scoped storage blocks the File API (Android 13+, API 33+).
+ * Default directory is Documents/ShiftAlarm (auto-created if missing). Falls back
+ * to the Download folder, then to an ExternalStorageProvider tree query +
+ * readability probe on devices where scoped storage blocks the File API.
  *
  * Returns files newest-first; empty when no readable .json files exist.
  */
@@ -42,8 +43,35 @@ object DownloadJsonPicker {
         "content://com.android.externalstorage.documents/tree/primary%3ADownload"
 
     fun listDownloadJsonFiles(context: Context): List<DownloadJsonFile> {
-        // Phase 1 — Direct filesystem listing.
-        // Reads real directory entries, immune to MediaStore / provider caching.
+        // Phase 1 — Direct filesystem listing of Documents/ShiftAlarm.
+        // Auto-creates the folder so it is always available.
+        val shiftAlarmDir = try {
+            val docsDir = Environment.getExternalStoragePublicDirectory(
+                Environment.DIRECTORY_DOCUMENTS
+            )
+            File(docsDir, "ShiftAlarm").also { it.mkdirs() }
+        } catch (e: Exception) {
+            null
+        }
+
+        if (shiftAlarmDir != null && shiftAlarmDir.isDirectory) {
+            val jsonFiles = shiftAlarmDir.listFiles { f ->
+                f.isFile && f.name.lowercase(Locale.ROOT).endsWith(".json")
+            }
+            if (jsonFiles != null && jsonFiles.isNotEmpty()) {
+                return jsonFiles
+                    .map { file ->
+                        val docId = "primary:Documents/ShiftAlarm/${file.name}"
+                        val uri = DocumentsContract.buildDocumentUri(
+                            EXTERNAL_STORAGE_AUTHORITY, docId
+                        )
+                        DownloadJsonFile(file.name, uri, file.lastModified())
+                    }
+                    .sortedByDescending { it.lastModifiedMillis }
+            }
+        }
+
+        // Phase 1b — Fallback to Download folder if ShiftAlarm dir is empty/unreadable.
         val downloadDir = try {
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
         } catch (e: Exception) {

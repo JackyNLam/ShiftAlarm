@@ -761,7 +761,6 @@ fun HomeScreen(
                     importFileLauncher.launch(arrayOf("application/json"))
                 }
             },
-            onChooseFolder = { chooseFolderLauncher.launch(null) },
             onDismiss = { showImportPicker = false }
         )
     }
@@ -1495,16 +1494,16 @@ private fun clampToImage(offset: Offset, imageRect: Rect): Offset = Offset(
 )
 
 /**
- * In-app picker for the schedule JSON import: lists .json files in the Download
- * folder (newest first) by walking the real filesystem, so already-deleted files
- * never appear. A "Browse…" fallback opens the system picker (with cache refresh).
- * A "Choose Folder" fallback lets the user pick any SAF-pickable folder.
+ * In-app picker for the schedule JSON import: lists .json files in
+ * Documents/ShiftAlarm (newest first) by walking the real filesystem, so
+ * already-deleted files never appear. Falls back to the Download folder, then
+ * to an ExternalStorageProvider query, then optionally to the SAF picker.
+ * The "Browse…" button opens the system picker (with cache refresh).
  */
 @Composable
 private fun DownloadJsonPickerDialog(
     onPick: (Uri) -> Unit,
     onBrowse: () -> Unit,
-    onChooseFolder: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -1529,7 +1528,7 @@ private fun DownloadJsonPickerDialog(
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "下載資料夾中的 JSON 檔案（最新的在上面）\nJSON files in the Download folder (newest first)",
+                text = "Documents/ShiftAlarm 中的 JSON 檔案（最新的在上面）\nJSON files in Documents/ShiftAlarm (newest first)",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1548,18 +1547,11 @@ private fun DownloadJsonPickerDialog(
                 }
                 currentFiles.isEmpty() -> {
                     Text(
-                        text = "下載資料夾中沒有 JSON 檔案\nNo JSON files in the Download folder",
+                        text = "沒有找到 JSON 檔案\nNo JSON files found",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 8.dp)
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = onChooseFolder,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("選擇其他資料夾 / Choose Another Folder")
-                    }
                 }
                 else -> {
                     LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
@@ -1606,7 +1598,6 @@ private fun DownloadJsonPickerDialog(
             ) {
                 TextButton(onClick = onDismiss) { Text("取消 / Cancel") }
                 Spacer(modifier = Modifier.weight(1f))
-                TextButton(onClick = onChooseFolder) { Text("資料夾 / Folder") }
                 TextButton(onClick = onBrowse) { Text("瀏覽… / Browse…") }
             }
         }

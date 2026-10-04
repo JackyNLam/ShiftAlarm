@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(do *)",
+      "Bash(done)",
+      "Bash(gh *)",
+      "Bash(then *)",
+      "Bash(else *)",
+      "Bash(fi)",
+      "Bash(git push *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(cd *)",
+      "Bash(git push)",
+      "Bash(git status)",
+      "Bash(echo *)",
+      "Bash(git log *)"
+    ]
+  },
+  "$version": 4
+}
