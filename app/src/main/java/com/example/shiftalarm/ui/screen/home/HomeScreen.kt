@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Visibility
@@ -1568,11 +1569,25 @@ private fun DownloadJsonPickerDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 8.dp)
                     )
+                    // Standalone button to grant folder access — not in the same row as Cancel.
                     if (!hasPersistedUri && onGrantAccess != null) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = onGrantAccess,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(
+                                Icons.Default.FolderOpen,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("選擇匯入資料夾 / Set Import Folder")
+                        }
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "如要啟用 Documents/ShiftAlarm 讀取權限，請選擇「設定資料夾」\nGrant file access by tapping 'Set Import Folder'",
-                            style = MaterialTheme.typography.bodySmall,
+                            text = "選擇 Documents/ShiftAlarm 資料夾以啟用讀取權限\nSelect the folder to grant file access",
+                            style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -1622,9 +1637,6 @@ private fun DownloadJsonPickerDialog(
             ) {
                 TextButton(onClick = onDismiss) { Text("取消 / Cancel") }
                 Spacer(modifier = Modifier.weight(1f))
-                if (!hasPersistedUri && onGrantAccess != null) {
-                    TextButton(onClick = onGrantAccess) { Text("設定資料夾 / Set Folder") }
-                }
                 TextButton(onClick = onBrowse) { Text("瀏覽… / Browse…") }
             }
         }
