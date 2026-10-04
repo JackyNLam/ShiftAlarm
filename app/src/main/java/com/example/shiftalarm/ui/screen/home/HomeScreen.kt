@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -272,7 +273,7 @@ fun HomeScreen(
                 putExtra(Intent.EXTRA_TITLE, "shift_alarm_ai_$today.json")
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     putExtra(
-                        Intent.EXTRA_INITIAL_URI,
+                        DocumentsContract.EXTRA_INITIAL_URI,
                         Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADocuments%2FShiftAlarm")
                     )
                 }
@@ -614,7 +615,7 @@ fun HomeScreen(
                                 putExtra(Intent.EXTRA_TITLE, "shift_alarm_$dateStr.json")
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                                     putExtra(
-                                        Intent.EXTRA_INITIAL_URI,
+                                        DocumentsContract.EXTRA_INITIAL_URI,
                                         Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADocuments%2FShiftAlarm")
                                     )
                                 }
