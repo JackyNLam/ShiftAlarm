@@ -1,6 +1,7 @@
 package com.example.shiftalarm.data
 
 import android.content.Context
+import android.content.Intent
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Environment
@@ -71,8 +72,34 @@ object DownloadJsonPicker {
         return listViaProvider(context)
     }
 
-    private fun listViaProvider(context: Context): List<DownloadJsonFile> {
-        val treeUri = Uri.parse(DOWNLOAD_TREE_URI)
+    /**
+     * Lists .json files in any user-picked folder via SAF tree traversal.
+     *
+     * Call this after the user picks a folder through
+     * [android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION] or
+     * [android.content.Intent.ACTION_OPEN_DOCUMENT_TREE]. The returned files have
+     * content URIs scoped to the picked tree — the caller may need to persist the
+     * URI permission if the URIs are used across process restarts.
+     *
+     * Returns files newest-first; empty when no readable .json files exist.
+     */
+    fun listJsonFilesFromTreeUri(context: Context, treeUri: Uri): List<DownloadJsonFile> {
+        // Take persistable permission so the URIs work after the activity is destroyed.
+        try {
+            context.contentResolver.takePersistableUriPermission(
+                treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        } catch (_: Exception) {
+            // best effort — the scan still works within the activity lifecycle
+        }
+        return scanTreeViaDocumentsContract(context, treeUri)
+    }
+
+    /**
+     * Shared SAF tree scanner used by both [listViaProvider] (hard-coded Download
+     * tree) and [listJsonFilesFromTreeUri] (user-picked folder).
+     */
+    private fun scanTreeViaDocumentsContract(context: Context, treeUri: Uri): List<DownloadJsonFile> {
         val resolver = context.contentResolver
         val treeDocId = try {
             DocumentsContract.getTreeDocumentId(treeUri)
@@ -131,6 +158,12 @@ object DownloadJsonPicker {
         }.map { DownloadJsonFile(it.name, it.uri, it.modified) }
 
         return dedupByNameKeepNewest(readable)
+    }
+
+    /** Fallback: query the Download folder through the ExternalStorageProvider tree. */
+    private fun listViaProvider(context: Context): List<DownloadJsonFile> {
+        val treeUri = Uri.parse(DOWNLOAD_TREE_URI)
+        return scanTreeViaDocumentsContract(context, treeUri)
     }
 
     /** Dedupes by name (case-insensitive) keeping the newest, sorted newest-first. */

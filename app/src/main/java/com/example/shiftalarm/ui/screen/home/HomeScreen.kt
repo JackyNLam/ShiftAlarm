@@ -180,6 +180,22 @@ fun HomeScreen(
         uri?.let { viewModel.importSchedule(it) }
     }
 
+    // Folder picker for the in-app import dialog — lets the user choose a
+    // different folder when the Download directory cannot be read (API 33+).
+    val pickerScope = rememberCoroutineScope()
+    var folderPickerResult by remember { mutableStateOf<List<DownloadJsonFile>?>(null) }
+    val chooseFolderLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        showImportPicker = false
+        pickerScope.launch {
+            folderPickerResult = withContext(Dispatchers.IO) {
+                DownloadJsonPicker.listJsonFilesFromTreeUri(context, uri)
+            }
+        }
+    }
+
     // Schedule-image import (photo of the paper schedule) — downscaled to a 2000px max side and stored.
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -730,6 +746,8 @@ fun HomeScreen(
 
     // Import schedule: the app's own Download-folder list is shown first — the
     // system picker can display ghost entries of JSON files already deleted.
+    // When the Download folder cannot be read (scoped storage on API 33+), a
+    // "choose folder" option lets the user pick a different directory via SAF.
     if (showImportPicker) {
         DownloadJsonPickerDialog(
             onPick = { uri ->
@@ -742,7 +760,21 @@ fun HomeScreen(
                     importFileLauncher.launch(arrayOf("application/json"))
                 }
             },
+            onChooseFolder = { chooseFolderLauncher.launch(null) },
             onDismiss = { showImportPicker = false }
+        )
+    }
+
+    // Folder-picker results dialog — shows JSONs found in the user-chosen folder.
+    if (folderPickerResult != null) {
+        val folderFiles = folderPickerResult!!
+        FolderResultDialog(
+            files = folderFiles,
+            onPick = { uri ->
+                folderPickerResult = null
+                viewModel.importSchedule(uri)
+            },
+            onDismiss = { folderPickerResult = null }
         )
     }
 
@@ -1464,12 +1496,14 @@ private fun clampToImage(offset: Offset, imageRect: Rect): Offset = Offset(
 /**
  * In-app picker for the schedule JSON import: lists .json files in the Download
  * folder (newest first) by walking the real filesystem, so already-deleted files
- * never appear. A "Browse…" fallback still opens the system picker.
+ * never appear. A "Browse…" fallback opens the system picker (with cache refresh).
+ * A "Choose Folder" fallback lets the user pick any SAF-pickable folder.
  */
 @Composable
 private fun DownloadJsonPickerDialog(
     onPick: (Uri) -> Unit,
     onBrowse: () -> Unit,
+    onChooseFolder: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -1518,6 +1552,13 @@ private fun DownloadJsonPickerDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 8.dp)
                     )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = onChooseFolder,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("選擇其他資料夾 / Choose Another Folder")
+                    }
                 }
                 else -> {
                     LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
@@ -1563,7 +1604,94 @@ private fun DownloadJsonPickerDialog(
                 horizontalArrangement = Arrangement.End
             ) {
                 TextButton(onClick = onDismiss) { Text("取消 / Cancel") }
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(onClick = onChooseFolder) { Text("資料夾 / Folder") }
                 TextButton(onClick = onBrowse) { Text("瀏覽… / Browse…") }
+            }
+        }
+    }
+}
+
+/**
+ * Shows JSON files found in a user-picked folder (via SAF tree scan).
+ * The user can tap a file to import it, or dismiss to go back.
+ */
+@Composable
+private fun FolderResultDialog(
+    files: List<DownloadJsonFile>,
+    onPick: (Uri) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .padding(16.dp)
+        ) {
+            Text(
+                text = "匯入排程 / Import Schedule",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "選擇的資料夾中的 JSON 檔案\nJSON files in the selected folder",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            if (files.isEmpty()) {
+                Text(
+                    text = "該資料夾中沒有 JSON 檔案\nNo JSON files in this folder",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            } else {
+                LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+                    items(files, key = { it.uri.toString() }) { file ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onPick(file.uri) }
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.FileDownload,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = file.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (file.lastModifiedMillis > 0) {
+                                    Text(
+                                        text = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
+                                            .format(Date(file.lastModifiedMillis)),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                TextButton(onClick = onDismiss) { Text("取消 / Cancel") }
             }
         }
     }
