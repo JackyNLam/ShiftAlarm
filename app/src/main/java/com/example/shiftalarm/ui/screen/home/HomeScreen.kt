@@ -193,8 +193,9 @@ fun HomeScreen(
     // BEFORE the picker runs (the picked URI can only be read once).
     val context = LocalContext.current
 
-    // Folder picker for the in-app import dialog — lets the user choose a
-    // different folder when the Download directory cannot be read (API 33+).
+    // Folder picker for the in-app import dialog — lets the user grant access
+    // to Documents/ShiftAlarm (or any folder) when scoped storage blocks the
+    // File API. The chosen tree URI is persisted so it works across restarts.
     val pickerScope = rememberCoroutineScope()
     var folderPickerResult by remember { mutableStateOf<List<DownloadJsonFile>?>(null) }
     val chooseFolderLauncher = rememberLauncherForActivityResult(
@@ -202,11 +203,20 @@ fun HomeScreen(
     ) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
         showImportPicker = false
+        DownloadJsonPicker.savePersistedTreeUri(context, uri)
         pickerScope.launch {
             folderPickerResult = withContext(Dispatchers.IO) {
                 DownloadJsonPicker.listJsonFilesFromTreeUri(context, uri)
             }
         }
+    }
+
+    /** Opens the SAF directory picker with Documents/ShiftAlarm as initial target. */
+    val grantAccessAction: () -> Unit = {
+        val initialUri = Uri.parse(
+            "content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FShiftAlarm"
+        )
+        chooseFolderLauncher.launch(initialUri)
     }
 
     val scheduleImagePermissionLauncher = rememberLauncherForActivityResult(
@@ -761,6 +771,7 @@ fun HomeScreen(
                     importFileLauncher.launch(arrayOf("application/json"))
                 }
             },
+            onGrantAccess = grantAccessAction,
             onDismiss = { showImportPicker = false }
         )
     }
@@ -1504,10 +1515,12 @@ private fun clampToImage(offset: Offset, imageRect: Rect): Offset = Offset(
 private fun DownloadJsonPickerDialog(
     onPick: (Uri) -> Unit,
     onBrowse: () -> Unit,
+    onGrantAccess: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     var files by remember { mutableStateOf<List<DownloadJsonFile>?>(null) }
+    val hasPersistedUri = remember { DownloadJsonPicker.getPersistedTreeUri(context) != null }
     LaunchedEffect(Unit) {
         files = withContext(Dispatchers.IO) {
             DownloadJsonPicker.listDownloadJsonFiles(context)
@@ -1528,7 +1541,10 @@ private fun DownloadJsonPickerDialog(
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Documents/ShiftAlarm 中的 JSON 檔案（最新的在上面）\nJSON files in Documents/ShiftAlarm (newest first)",
+                text = if (hasPersistedUri)
+                    "選擇的資料夾中的 JSON 檔案（最新的在上面）\nJSON files in the selected folder (newest first)"
+                else
+                    "Documents/ShiftAlarm 中的 JSON 檔案（最新的在上面）\nJSON files in Documents/ShiftAlarm (newest first)",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1552,6 +1568,14 @@ private fun DownloadJsonPickerDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 8.dp)
                     )
+                    if (!hasPersistedUri && onGrantAccess != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "如要啟用 Documents/ShiftAlarm 讀取權限，請選擇「設定資料夾」\nGrant file access by tapping 'Set Import Folder'",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 else -> {
                     LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
@@ -1598,6 +1622,9 @@ private fun DownloadJsonPickerDialog(
             ) {
                 TextButton(onClick = onDismiss) { Text("取消 / Cancel") }
                 Spacer(modifier = Modifier.weight(1f))
+                if (!hasPersistedUri && onGrantAccess != null) {
+                    TextButton(onClick = onGrantAccess) { Text("設定資料夾 / Set Folder") }
+                }
                 TextButton(onClick = onBrowse) { Text("瀏覽… / Browse…") }
             }
         }

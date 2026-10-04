@@ -9,7 +9,7 @@ import android.provider.DocumentsContract
 import java.io.File
 import java.util.Locale
 
-/** One real .json file found in the device's Download folder, with its content Uri. */
+/** One real .json file found in the user's chosen import folder, with its content Uri. */
 data class DownloadJsonFile(
     val name: String,
     val uri: Uri,
@@ -25,15 +25,18 @@ data class DownloadJsonFile(
  * physical drive, so ghost entries survive until a background rescan.
  *
  * This class uses direct filesystem traversal ([File.listFiles]) as its primary
- * path. It reads actual directory entries on disk, so deleted files disappear
- * immediately — the same behaviour as the "Internal Storage" tab in the system
- * file manager. Content URIs are built from the filesystem paths so the caller
- * can still open them through [android.content.ContentResolver].
+ * path on non-scoped-storage devices. On API 30+ devices with scoped storage,
+ * [File.listFiles] returns null for directories like Documents/ShiftAlarm that
+ * are not in a MediaStore collection. On those devices the user must grant
+ * folder access once via [android.content.Intent.ACTION_OPEN_DOCUMENT_TREE].
+ * The granted tree URI is persisted in SharedPreferences and is used for all
+ * future queries, producing readable content URIs.
  *
- * Default directory is Documents/ShiftAlarm (auto-created if missing). Falls back
- * to a provider-based query on Documents/ShiftAlarm (for scoped-storage devices),
- * then to the Download folder, then to an ExternalStorageProvider tree query +
- * readability probe on devices where scoped storage blocks the File API.
+ * Fallback chain:
+ *   Phase 1 — Direct filesystem listing of Documents/ShiftAlarm.
+ *   Phase 2 — Persisted SAF tree URI (user-granted; must be granted once).
+ *   Phase 3 — Direct filesystem listing of the Download folder.
+ *   Phase 4 — Hardcoded Download ExternalStorageProvider tree query.
  *
  * Returns files newest-first; empty when no readable .json files exist.
  */
@@ -42,8 +45,10 @@ object DownloadJsonPicker {
     private const val EXTERNAL_STORAGE_AUTHORITY = "com.android.externalstorage.documents"
     private const val DOWNLOAD_TREE_URI =
         "content://com.android.externalstorage.documents/tree/primary%3ADownload"
-    private const val DOCUMENTS_SHIFTALARM_TREE_URI =
-        "content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FShiftAlarm"
+    private const val PREF_NAME = "DownloadJsonPicker"
+    private const val KEY_PERSISTED_TREE_URI = "persisted_tree_uri"
+
+    // ── Main listing entry point ───────────────────────────────────────────
 
     fun listDownloadJsonFiles(context: Context): List<DownloadJsonFile> {
         // Phase 1 — Direct filesystem listing of Documents/ShiftAlarm.
@@ -74,15 +79,17 @@ object DownloadJsonPicker {
             }
         }
 
-        // Phase 1a — Provider-based listing of Documents/ShiftAlarm.
-        // On API 30+ scoped storage, File.listFiles() may return null even though
-        // the directory exists. Query through ExternalStorageProvider as fallback.
-        val providerResult = listViaProviderForShiftAlarm(context)
-        if (providerResult.isNotEmpty()) {
-            return providerResult
+        // Phase 2 — Persisted SAF tree URI (user-granted via ACTION_OPEN_DOCUMENT_TREE).
+        // The user selects Documents/ShiftAlarm once; subsequent app launches use this
+        // URI via scanTreeViaDocumentsContract() without requiring MANAGE_EXTERNAL_STORAGE.
+        val persistedUri = getPersistedTreeUri(context)
+        if (persistedUri != null) {
+            // Only scan the user-selected folder — DO NOT fall through to Download,
+            // which would show files from the wrong location.
+            return scanTreeViaDocumentsContract(context, persistedUri)
         }
 
-        // Phase 1b — Fallback to Download folder if ShiftAlarm dir is empty/unreadable.
+        // Phase 3 — Fallback to Download folder (no persisted URI yet).
         val downloadDir = try {
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
         } catch (e: Exception) {
@@ -106,37 +113,65 @@ object DownloadJsonPicker {
             }
         }
 
-        // Phase 2 — Scoped storage blocked the File API.
-        // Fall back to ExternalStorageProvider tree query with readability probe.
+        // Phase 4 — Hardcoded Download tree URI (may work on some devices).
         return listViaProvider(context)
     }
 
+    // ── SAF tree URI helpers ──────────────────────────────────────────────────
+
     /**
-     * Lists .json files in any user-picked folder via SAF tree traversal.
+     * Persist a user-selected SAF tree URI so it survives app restarts.
      *
-     * Call this after the user picks a folder through
-     * [android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION] or
-     * [android.content.Intent.ACTION_OPEN_DOCUMENT_TREE]. The returned files have
-     * content URIs scoped to the picked tree — the caller may need to persist the
-     * URI permission if the URIs are used across process restarts.
-     *
-     * Returns files newest-first; empty when no readable .json files exist.
+     * Takes a persistable read permission on the URI so [buildDocumentUriUsingTree]
+     * URIs stay readable across reboots. Call this right after the user picks a
+     * folder via [android.content.Intent.ACTION_OPEN_DOCUMENT_TREE].
      */
-    fun listJsonFilesFromTreeUri(context: Context, treeUri: Uri): List<DownloadJsonFile> {
-        // Take persistable permission so the URIs work after the activity is destroyed.
+    fun savePersistedTreeUri(context: Context, treeUri: Uri) {
         try {
             context.contentResolver.takePersistableUriPermission(
                 treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION
             )
         } catch (_: Exception) {
-            // best effort — the scan still works within the activity lifecycle
+            // Without persistable permission the URI may not survive restarts,
+            // but the scan still works within the current activity lifecycle.
         }
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_PERSISTED_TREE_URI, treeUri.toString())
+            .apply()
+    }
+
+    /** Returns the persisted SAF tree URI, or null if none was granted. */
+    fun getPersistedTreeUri(context: Context): Uri? {
+        val uriStr = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_PERSISTED_TREE_URI, null) ?: return null
+        return try { Uri.parse(uriStr) } catch (_: Exception) { null }
+    }
+
+    /** Clears the persisted SAF tree URI. */
+    fun clearPersistedTreeUri(context: Context) {
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .remove(KEY_PERSISTED_TREE_URI)
+            .apply()
+    }
+
+    // ── SAF tree traversal ──────────────────────────────────────────────────
+
+    /**
+     * Lists .json files in a user-selected folder via SAF tree traversal.
+     *
+     * Can be called directly with a freshly-picked URI (without pre-persisting).
+     * [savePersistedTreeUri] must be called separately if the caller wants the
+     * URI to survive process restarts.
+     */
+    fun listJsonFilesFromTreeUri(context: Context, treeUri: Uri): List<DownloadJsonFile> {
         return scanTreeViaDocumentsContract(context, treeUri)
     }
 
     /**
-     * Shared SAF tree scanner used by both [listViaProvider] (hard-coded Download
-     * tree) and [listJsonFilesFromTreeUri] (user-picked folder).
+     * Shared SAF tree scanner used by all tree-URI-based phases and
+     * [listJsonFilesFromTreeUri].
      */
     private fun scanTreeViaDocumentsContract(context: Context, treeUri: Uri): List<DownloadJsonFile> {
         val resolver = context.contentResolver
@@ -202,12 +237,6 @@ object DownloadJsonPicker {
     /** Fallback: query the Download folder through the ExternalStorageProvider tree. */
     private fun listViaProvider(context: Context): List<DownloadJsonFile> {
         val treeUri = Uri.parse(DOWNLOAD_TREE_URI)
-        return scanTreeViaDocumentsContract(context, treeUri)
-    }
-
-    /** Query Documents/ShiftAlarm through the ExternalStorageProvider tree (scoped storage bypass). */
-    private fun listViaProviderForShiftAlarm(context: Context): List<DownloadJsonFile> {
-        val treeUri = Uri.parse(DOCUMENTS_SHIFTALARM_TREE_URI)
         return scanTreeViaDocumentsContract(context, treeUri)
     }
 
