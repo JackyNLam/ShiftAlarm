@@ -31,7 +31,8 @@ data class DownloadJsonFile(
  * can still open them through [android.content.ContentResolver].
  *
  * Default directory is Documents/ShiftAlarm (auto-created if missing). Falls back
- * to the Download folder, then to an ExternalStorageProvider tree query +
+ * to a provider-based query on Documents/ShiftAlarm (for scoped-storage devices),
+ * then to the Download folder, then to an ExternalStorageProvider tree query +
  * readability probe on devices where scoped storage blocks the File API.
  *
  * Returns files newest-first; empty when no readable .json files exist.
@@ -41,6 +42,8 @@ object DownloadJsonPicker {
     private const val EXTERNAL_STORAGE_AUTHORITY = "com.android.externalstorage.documents"
     private const val DOWNLOAD_TREE_URI =
         "content://com.android.externalstorage.documents/tree/primary%3ADownload"
+    private const val DOCUMENTS_SHIFTALARM_TREE_URI =
+        "content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FShiftAlarm"
 
     fun listDownloadJsonFiles(context: Context): List<DownloadJsonFile> {
         // Phase 1 — Direct filesystem listing of Documents/ShiftAlarm.
@@ -69,6 +72,14 @@ object DownloadJsonPicker {
                     }
                     .sortedByDescending { it.lastModifiedMillis }
             }
+        }
+
+        // Phase 1a — Provider-based listing of Documents/ShiftAlarm.
+        // On API 30+ scoped storage, File.listFiles() may return null even though
+        // the directory exists. Query through ExternalStorageProvider as fallback.
+        val providerResult = listViaProviderForShiftAlarm(context)
+        if (providerResult.isNotEmpty()) {
+            return providerResult
         }
 
         // Phase 1b — Fallback to Download folder if ShiftAlarm dir is empty/unreadable.
@@ -191,6 +202,12 @@ object DownloadJsonPicker {
     /** Fallback: query the Download folder through the ExternalStorageProvider tree. */
     private fun listViaProvider(context: Context): List<DownloadJsonFile> {
         val treeUri = Uri.parse(DOWNLOAD_TREE_URI)
+        return scanTreeViaDocumentsContract(context, treeUri)
+    }
+
+    /** Query Documents/ShiftAlarm through the ExternalStorageProvider tree (scoped storage bypass). */
+    private fun listViaProviderForShiftAlarm(context: Context): List<DownloadJsonFile> {
+        val treeUri = Uri.parse(DOCUMENTS_SHIFTALARM_TREE_URI)
         return scanTreeViaDocumentsContract(context, treeUri)
     }
 
