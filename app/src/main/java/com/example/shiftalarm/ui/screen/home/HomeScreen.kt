@@ -1,9 +1,12 @@
 package com.example.shiftalarm.ui.screen.home
 
+import android.app.Activity
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -169,9 +172,11 @@ fun HomeScreen(
     var pendingDeleteImage by remember { mutableStateOf<String?>(null) }
 
     val exportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json")
-    ) { uri: Uri? ->
-        uri?.let { viewModel.exportSchedule(it) }
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            result.data?.data?.let { viewModel.exportSchedule(it) }
+        }
     }
 
     // Multi-day import: pick a JSON file, every entry in it is applied.
@@ -247,16 +252,32 @@ fun HomeScreen(
 
     // AI result export — same JSON format as import/export schedule
     val aiExportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json")
-    ) { uri: Uri? ->
-        uri?.let { viewModel.completeAiExport(it) }
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            result.data?.data?.let { viewModel.completeAiExport(it) }
+        }
     }
 
     // Auto-export: as soon as AI extraction produces a result, ask where to save it.
     LaunchedEffect(state.pendingAiExportJson) {
         if (state.pendingAiExportJson != null) {
+            val dir = Environment.getExternalStoragePublicDirectory(
+                Environment.DIRECTORY_DOCUMENTS
+            ).resolve("ShiftAlarm")
+            dir.mkdirs()
             val today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
-            aiExportLauncher.launch("shift_alarm_ai_$today.json")
+            val aiExportIntent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                type = "application/json"
+                putExtra(Intent.EXTRA_TITLE, "shift_alarm_ai_$today.json")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    putExtra(
+                        Intent.EXTRA_INITIAL_URI,
+                        Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADocuments%2FShiftAlarm")
+                    )
+                }
+            }
+            aiExportLauncher.launch(aiExportIntent)
         }
     }
 
@@ -582,9 +603,23 @@ fun HomeScreen(
                         icon = Icons.Default.FileDownload,
                         text = "📤 匯出排程\nExport Schedules",
                         onClick = {
+                            val dir = Environment.getExternalStoragePublicDirectory(
+                                Environment.DIRECTORY_DOCUMENTS
+                            ).resolve("ShiftAlarm")
+                            dir.mkdirs()
                             val dateStr = LocalDate.now()
                                 .format(DateTimeFormatter.ISO_LOCAL_DATE)
-                            exportLauncher.launch("shift_alarm_$dateStr.json")
+                            val exportIntent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                                type = "application/json"
+                                putExtra(Intent.EXTRA_TITLE, "shift_alarm_$dateStr.json")
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    putExtra(
+                                        Intent.EXTRA_INITIAL_URI,
+                                        Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADocuments%2FShiftAlarm")
+                                    )
+                                }
+                            }
+                            exportLauncher.launch(exportIntent)
                         }
                     )
                     ScheduleActionCard(
@@ -1569,20 +1604,8 @@ private fun DownloadJsonPickerDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 8.dp)
                     )
-                    // Standalone button to grant folder access — not in the same row as Cancel.
-                    // Always visible when onGrantAccess is provided, even when a persisted
-                    // URI already exists — the user may need to re-select if the folder is wrong.
                     if (onGrantAccess != null) {
                         Spacer(modifier = Modifier.height(12.dp))
-                        if (hasPersistedUri) {
-                            // A stale/wrong persisted URI — offer to clear and re-select.
-                            Text(
-                                text = "已設定資料夾但找不到 JSON 檔案，請重新選擇\nA folder was set but no JSON files found — please re-select",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(bottom = 4.dp)
-                            )
-                        }
                         Button(
                             onClick = {
                                 if (hasPersistedUri) {
@@ -1603,12 +1626,6 @@ private fun DownloadJsonPickerDialog(
                                 else "選擇匯入資料夾 / Set Import Folder"
                             )
                         }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "選擇 Documents/ShiftAlarm 資料夾以啟用讀取權限\nSelect the folder to grant file access",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
                     }
                 }
                 else -> {
